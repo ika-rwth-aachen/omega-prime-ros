@@ -64,7 +64,7 @@ RUN python -m pip install --upgrade pip && \
 
 # Include the converter inside the image
 RUN mkdir -p /opt/ros2_conversion
-COPY tools/ros2_conversion/ros_to_omega_prime.py /opt/ros2_conversion/ros_to_omega_prime.py
+COPY ros_to_omega_prime.py /opt/ros2_conversion/ros_to_omega_prime.py
 
 # Convenience entrypoint to ensure ROS env is sourced
 ADD <<'EOS' /ros_entrypoint.sh

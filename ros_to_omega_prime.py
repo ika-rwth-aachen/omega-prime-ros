@@ -461,7 +461,6 @@ def _parse_args() -> argparse.Namespace:
         default=3.0,
         help="Timeout in seconds for checking if same object is seen again",
     )
-    # TODO: Check this
     parser.add_argument(
         "--extract_ego",
         default=env_extract_ego,
@@ -499,9 +498,9 @@ def main() -> None:
 
     for bag in bags:
         if map_path and map_path.exists():
-            print(f"[object_list_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}")
+            print(f"[ros_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}")
         else:
-            print(f"[object_list_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
+            print(f"[ros_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
         out_file = convert_bag_to_omega_prime(
             bag,
             args.topic,

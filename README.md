@@ -13,13 +13,13 @@ This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via Py
 docker build -t ros2omegaprime \
     --build-arg OMEGA_PRIME_VERSION=latest \
     --build-arg PERCEPTION_INTERFACES_REF=<commit-or-branch> \
-    -f tools/ros2_conversion/Dockerfile .
+    -f Dockerfile .
 ```
 
 ## Run
 - Mount your bag directory to `/data` and an output directory to `/out`.
-- EgoData is extracted automatically, set with `OP_EXTRACT_EGO` if this is not wanted.
-- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics seperated by `;`. 
+- EgoData is extracted automatically, set with `OP_EXTRACT_EGO=False` if this is not wanted.
+- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics in a string seperated by `;`(`"/topic1;/topic2;/topic3"`). 
 
 ### Example:
 ```bash
@@ -37,7 +37,7 @@ docker run --rm -it \
 - The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root) of your setup, for example the global UTM/world frame. When `fixed_frame` is map, the map must be parsed and the projection string is the one of the map.
 - These transforms are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
 - The fixed frame is converted to an EPSG projection string and written as `projections["proj_string"]`.
-- Supported fixed frame values are currently: `utm_<zone_nr: int>[N/S]`. Examples: `utm_30N`, `utm_32S`
+- Supported fixed frame values are currently: `utm_<zone_nr: int>[N/S]` and `map`. Examples: `utm_30N`, `utm_32S`
 
 ## Notes
 - The image builds and installs `perception_interfaces` packages needed for Python APIs and messages (`perception_msgs`, `perception_msgs_utils`, `tf2_perception_msgs`).
