@@ -1,6 +1,6 @@
 """
-Standalone converter: read perception_msgs/ObjectList messages from ROS 2 bags
-and emit omega-prime MCAP files.
+Standalone converter: read perception_msgs/ObjectList messages and perception_msgs/EgoData from ROS 2 bags
+and emit omega-prime mcap files.
 
 The CLI can process specific bag directories or scan a data root for rosbag2
 folders (identified via metadata.yaml).
@@ -96,10 +96,24 @@ def _object_to_row(obj) -> dict[str, Any]:
     total_nanos = Time.from_msg(obj.state.header.stamp).nanoseconds
 
     pos = pmu.get_position(obj)
-    width = pmu.get_width(obj)
-    length = pmu.get_length(obj)
-    height = pmu.get_height(obj)
+    vel = pmu.get_velocity(obj)
+    acc = pmu.get_acceleration(obj)
 
+    try:
+        idx = int(obj.id)
+    except AttributeError:
+        idx = int(obj.vehicle_id)
+
+    try:
+        width = float(pmu.get_width(obj))
+        length = float(pmu.get_length(obj))
+        height = float(pmu.get_height(obj))
+    except (AttributeError, pmu.UnknownStateEntryError):
+        width = float(obj.width)
+        length = float(obj.length)
+        height = float(obj.height)
+
+    yaw = pmu.get_yaw(obj)
     # pitch and roll might not be available
     try:
         if pmu.index_roll(obj.state.model_id) is not None:
@@ -112,29 +126,23 @@ def _object_to_row(obj) -> dict[str, Any]:
     except pmu.UnknownStateEntryError:
         pitch = 0.0
 
-    yaw = pmu.get_yaw(obj)
-    vel_x = pmu.get_vel_x(obj)
-    vel_y = pmu.get_vel_y(obj)
-    acc_x = pmu.get_acc_x(obj)
-    acc_y = pmu.get_acc_y(obj)
-
     mot, role, subtype = _class_to_osi(obj)
 
     return {
         "total_nanos": int(total_nanos),
-        "idx": int(obj.id),
+        "idx": idx,
         "x": float(pos.x),
         "y": float(pos.y),
         "z": float(getattr(pos, "z", 0.0)),
-        "vel_x": float(vel_x),
-        "vel_y": float(vel_y),
-        "vel_z": 0.0,
-        "acc_x": float(acc_x),
-        "acc_y": float(acc_y),
-        "acc_z": 0.0,
-        "length": float(length),
-        "width": float(width),
-        "height": float(height),
+        "vel_x": float(vel.x),
+        "vel_y": float(vel.y),
+        "vel_z": float(getattr(vel, "z", 0.0)),
+        "acc_x": float(acc.x),
+        "acc_y": float(acc.y),
+        "acc_z": float(getattr(acc, "z", 0.0)),
+        "length": length,
+        "width": width,
+        "height": height,
         "roll": float(roll),
         "pitch": float(pitch),
         "yaw": float(yaw),
@@ -186,10 +194,11 @@ def _storage_id(meta: dict[str, Any]) -> str:
     return meta["rosbag2_bagfile_information"]["storage_identifier"]
 
 
-def iter_object_list_messages(
+def iter_bag_messages(
     bag_dir: Path,
-    topic: str,
+    topic: list[str] | None,
     fixed_frame: str,
+    extract_ego: bool,
     projection: dict[Any, Any],
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
@@ -202,14 +211,36 @@ def iter_object_list_messages(
 
     type_map = {info.name: info.type for info in reader.get_all_topics_and_types()}
 
-    if topic not in type_map:
-        available = ", ".join(sorted(type_map))
-        raise RuntimeError(f"Topic {topic} not found. Available topics: {available}")
+    msg_cls_dict = {}
 
-    msg_cls = get_message(type_map[topic])
+    ego_topic = None
+    # Get the EgoData message class and topic if requested
+    if extract_ego:
+        ego_msg_name = "perception_msgs/msg/EgoData"
+        ego_cls = get_message(ego_msg_name)
+        ego_topic_list = [name for name, t in type_map.items() if t == ego_msg_name]
+        if not ego_topic_list:
+            available = ", ".join(sorted(type_map))
+            raise RuntimeError(f"EgoData msg {ego_cls} not found in bag topics. Available topics: {available}")
+        if len(ego_topic_list) > 1:
+            print(
+                f"Warning: Multiple topics with EgoData type found: {ego_topic_list}. Using first one: {ego_topic_list[0]}"
+            )
+        ego_topic = ego_topic_list[0]
+        msg_cls_dict[ego_topic] = ego_cls
 
-    tf_msg_cls = get_message(type_map["/tf"]) if "/tf" in type_map else None
-    static_tf_msg_cls = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
+    if topic is not None:
+        for top in topic:
+            if top not in type_map:
+                available = ", ".join(sorted(type_map))
+                raise RuntimeError(f"Topic {top} not found. Available topics: {available}")
+            try:
+                msg_cls_dict[top] = get_message(type_map[top])
+            except Exception:
+                print(f"Warning: Could not get message class for topic {top}. Skipping.")
+
+    msg_cls_dict["/tf"] = get_message(type_map["/tf"]) if "/tf" in type_map else None
+    msg_cls_dict["/tf_static"] = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
 
     # TF buffer for resolving transforms
     buffer = Buffer()
@@ -244,24 +275,29 @@ def iter_object_list_messages(
     while reader.has_next():
         topic_name, data, _ = reader.read_next()
 
-        if topic_name == "/tf_static" and static_tf_msg_cls is not None:
-            tf_msg = deserialize_message(data, static_tf_msg_cls)
-            for transform in tf_msg.transforms:
+        if topic_name not in msg_cls_dict.keys():
+            continue
+
+        try:
+            msg = deserialize_message(data, msg_cls_dict.get(topic_name))
+        except Exception:
+            print(
+                f"Warning: Could not deserialize message on topic {topic_name} of type {msg_cls_dict.get(topic_name)}. Skipping."
+            )
+            continue
+
+        if topic_name == "/tf_static":
+            for transform in msg.transforms:
                 buffer.set_transform_static(transform, "bag")
             retry_pending()
             continue
 
-        if topic_name == "/tf" and tf_msg_cls is not None:
-            tf_msg = deserialize_message(data, tf_msg_cls)
-            for transform in tf_msg.transforms:
+        if topic_name == "/tf":
+            for transform in msg.transforms:
                 buffer.set_transform(transform, "bag")
             retry_pending()
             continue
 
-        if topic_name != topic:
-            continue
-
-        msg = deserialize_message(data, msg_cls)
         msg_frame_id = msg.header.frame_id
         stamp = msg.header.stamp if hasattr(msg, "header") else None
         if stamp is not None:
@@ -269,7 +305,7 @@ def iter_object_list_messages(
             if not try_resolve_and_store(stamp_time, msg_frame_id):
                 pending.append((stamp_time, msg_frame_id))
 
-        yield msg
+        yield (msg, msg_cls_dict[topic_name])
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
     retry_pending()
@@ -293,24 +329,36 @@ def _warn_if_reappearing_id(
 
 def convert_bag_to_omega_prime(
     bag_dir: Path,
-    topic: str,
+    topic: list[str] | None,
     output_dir: Path,
     fixed_frame: str,
     timeout: float,
+    extract_ego: bool,
     map_path: Path | None = None,
     validate: bool = False,
 ) -> Path:
     projections: dict[Any, Any] = {}
     warn_gap_nanos = timeout * 1e9
     last_seen_by_idx: dict[int, int] = {}
+    host_vehicle_id: int | None = None
 
     def row_iter() -> Iterable[dict[str, Any]]:
-        for msg in iter_object_list_messages(
+        nonlocal host_vehicle_id
+        for msg, msg_type in iter_bag_messages(
             bag_dir,
             topic,
             fixed_frame,
+            extract_ego,
             projection=projections,
         ):
+            msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+            if msg_type_name == "EgoData":
+                row = _object_to_row(msg)
+                if host_vehicle_id is None:
+                    host_vehicle_id = int(row["idx"])
+                yield row
+                continue
+
             for row in _olist_to_rows(msg):
                 _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_nanos)
                 yield row
@@ -337,13 +385,18 @@ def convert_bag_to_omega_prime(
             raise KeyError(f"No EPSG Code defined for {fixed_frame}")
     projections["proj_string"] = proj_string
 
-    rec = omega_prime.Recording(df=df, projections=projections, validate=validate)
+    rec = omega_prime.Recording(
+        df=df,
+        projections=projections,
+        validate=validate,
+        host_vehicle_idx=host_vehicle_id,
+    )
 
     if map_path and map_path.exists():
         rec.map = omega_prime.MapOdr.from_file(str(map_path))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"{bag_dir.name}.omega-prime.parquet"
+    out_path = output_dir / f"{bag_dir.name}.omega-prime.mcap"
     rec.to_file(out_path)
     return out_path
 
@@ -356,6 +409,12 @@ def _discover_bags(data_dir: Path) -> list[Path]:
 def _parse_args() -> argparse.Namespace:
     env_validate = os.environ.get("OP_VALIDATE", "").lower() in {"1", "true", "yes"}
     env_fixed_frame = os.environ.get("OP_FIXED_FRAME", "utm_32N")
+    env_extract_ego = os.environ.get("OP_EXTRACT_EGO", "true").lower() in {"1", "true", "yes"}
+    env_topic = os.environ.get("OP_TOPIC", None)
+    if env_topic:
+        env_topic_list = [t.strip() for t in env_topic.split(";") if t.strip()]
+    else:
+        env_topic_list = None
 
     parser = argparse.ArgumentParser(description="Convert ROS 2 ObjectList bags to omega-prime MCAP")
     parser.add_argument(
@@ -363,11 +422,15 @@ def _parse_args() -> argparse.Namespace:
         default=os.environ.get("OP_DATA", "/data"),
         help="Directory containing rosbag2 folders",
     )
-    parser.add_argument("--topic", default=os.environ.get("OP_TOPIC"), help="ObjectList topic to export")
+    parser.add_argument(
+        "--topic",
+        default=env_topic_list if env_topic and env_topic_list else None,
+        help="ObjectList topic to export",
+    )
     parser.add_argument(
         "--output-dir",
         default=os.environ.get("OP_OUT", "/out"),
-        help="Directory to write omega-prime parquets",
+        help="Directory to write omega-prime mcap files",
     )
     parser.add_argument(
         "--bag",
@@ -398,13 +461,21 @@ def _parse_args() -> argparse.Namespace:
         default=3.0,
         help="Timeout in seconds for checking if same object is seen again",
     )
+    # TODO: Check this
+    parser.add_argument(
+        "--extract_ego",
+        default=env_extract_ego,
+        action="store_true",
+        help="Extract EgoData",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
-    if not args.topic:
-        raise SystemExit("--topic or OP_TOPIC env variable must be provided")
+
+    if not args.extract_ego and not args.topic:
+        raise ValueError("At least one of --extract_ego or --topic must be specified")
 
     bag_dirs = [Path(b).resolve() for b in args.bag]
     data_root = Path(args.data_dir).resolve()
@@ -437,10 +508,11 @@ def main() -> None:
             out_dir,
             args.fixed_frame,
             args.timeout,
+            args.extract_ego,
             map_path,
             args.validate,
         )
-        print(f"[object_list_to_omega_prime] Wrote {out_file}")
+        print(f"[ros_to_omega_prime] Wrote {out_file}")
 
 
 if __name__ == "__main__":

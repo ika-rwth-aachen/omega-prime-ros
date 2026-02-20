@@ -1,6 +1,6 @@
 # ROS 2 Bag -> omega-prime Docker Image
 
-This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via PyPI), and builds perception_interfaces (messages + Python utils) from GitHub so you can export ObjectList topics to omega-prime MCAP using the built-in converter.
+This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via PyPI), and builds perception_interfaces (messages + Python utils) from GitHub so you can export EgoData and ObjectList topics to omega-prime MCAP using the built-in converter.
 
 ## Build Args
 - `OMEGA_PRIME_VERSION` (default `latest`): PyPI version to install; use `latest` for newest
@@ -18,12 +18,14 @@ docker build -t ros2omegaprime \
 
 ## Run
 - Mount your bag directory to `/data` and an output directory to `/out`.
-- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically.
+- EgoData is extracted automatically, set with `OP_EXTRACT_EGO` if this is not wanted.
+- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics seperated by `;`. 
 
 ### Example:
 ```bash
 docker run --rm -it \
-    -e OP_TOPIC=</your/object_list_topic> \
+    -e OP_TOPIC="</your/object_list_topic1>;</your/object_list_topic2>" \
+    -e OP_EXTRACT_EGO=False \
     -v <path/to/bags>:/data:ro \
     -v </path/to/map.xodr>:/map/map.xodr:ro \
     -v "$PWD"/out:/out \
@@ -31,7 +33,7 @@ docker run --rm -it \
 ```
 
 ## Projections and Fixed Frame
-- The converter reads `/tf` + `/tf_static` and resolves each ObjectList message frame against the configured `fixed_frame`.
+- The converter reads `/tf` + `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `fixed_frame`.
 - The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root) of your setup, for example the global UTM/world frame. When `fixed_frame` is map, the map must be parsed and the projection string is the one of the map.
 - These transforms are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
 - The fixed frame is converted to an EPSG projection string and written as `projections["proj_string"]`.
@@ -46,7 +48,8 @@ docker run --rm -it \
 - Env vars / CLI flags:
   - `OP_DATA` / `--data-dir` (default `/data`)
   - `OP_OUT` / `--output-dir` (default `/out`)
-  - `OP_TOPIC` / `--topic` (required)
+  - `OP_TOPIC` / `--topic` (e.g `"/topic1"` or `"/topic1;/topic2;/topic3"` for multiple extractions)
+  - `OP_EXTRACT_EGO` / `--extract_ego` (default `True`)
   - `OP_VALIDATE` / `--validate`
   - `OP_FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
   - `--bag` to process explicit bag directories in addition to auto-discovery
