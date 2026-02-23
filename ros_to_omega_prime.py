@@ -419,16 +419,25 @@ def _discover_bags(data_dir: Path) -> list[Path]:
 
 
 def _parse_args() -> argparse.Namespace:
-    env_validate = os.environ.get("OP_VALIDATE", "").lower() in {"1", "true", "yes"}
-    env_fixed_frame = os.environ.get("OP_FIXED_FRAME", "utm_32N")
-    env_ego_data_topic = os.environ.get("OP_EGO_DATA_TOPIC", None)
-    env_object_list_topic = os.environ.get("OP_OBJECT_LIST_TOPIC", None)
+    env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
+    env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
+    env_ego_data_topic = os.environ.get("EGO_DATA_TOPIC", None)
+    env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
+    env_bag_dir = os.environ.get("BAG_DIR", "/input")
+    env_op_dir = os.environ.get("OP_DIR", "/output")
+    env_map = os.environ.get("MAP", "/map/map.xodr")
+    env_bag = [p.strip() for p in os.environ.get("BAG", "").split(",") if p.strip()]
+    env_id_gap_raw = os.environ.get("ID_GAP", "3.0")
+    try:
+        env_id_gap = float(env_id_gap_raw)
+    except ValueError as exc:
+        raise ValueError(f"ID_GAP must be a float, got {env_id_gap_raw!r}") from exc
 
     parser = argparse.ArgumentParser(description="Convert ROS 2 ObjectList bags to omega-prime MCAP")
     parser.add_argument(
-        "--data-dir",
-        default=os.environ.get("OP_DATA", "/data"),
-        help="Directory containing rosbag2 folders",
+        "--bag-dir",
+        default=env_bag_dir,
+        help="Directory containing rosbag2 folders (default: BAG_DIR or /input)",
     )
     parser.add_argument(
         "--object_list_topic",
@@ -436,21 +445,21 @@ def _parse_args() -> argparse.Namespace:
         help="ObjectList topic to export",
     )
     parser.add_argument(
-        "--output-dir",
-        default=os.environ.get("OP_OUT", "/out"),
-        help="Directory to write omega-prime mcap files",
+        "--op-dir",
+        default=env_op_dir,
+        help="Directory to write omega-prime mcap files (default: OP_DIR or /output)",
     )
     parser.add_argument(
         "--bag",
         action="append",
-        default=[],
-        help="Explicit bag directory to convert (repeatable)",
+        default=env_bag,
+        help="Explicit bag directory to convert (repeatable, or comma-separated via BAG)",
     )
     parser.add_argument(
         "--map",
         dest="map_path",
-        default="/map/map.xodr",
-        help="Optional OpenDRIVE map to embed",
+        default=env_map,
+        help="Optional OpenDRIVE map to embed (default: MAP or /map/map.xodr)",
     )
     parser.add_argument(
         "--validate",
@@ -461,13 +470,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fixed_frame",
         default=env_fixed_frame,
-        help="Target fixed frame used for TF lookup and projection metadata (default: OP_FIXED_FRAME or utm_32N)",
+        help="Target fixed frame used for TF lookup and projection metadata (default: FIXED_FRAME or utm_32N)",
     )
     parser.add_argument(
         "--id-gap",
         type=float,
-        default=3.0,
-        help="Warning threshold in seconds if the same object ID appears again",
+        default=env_id_gap,
+        help="Warning threshold in seconds if the same object ID appears again (default: ID_GAP or 3.0)",
     )
     parser.add_argument(
         "--ego_data_topic",
@@ -484,9 +493,9 @@ def main() -> None:
         raise ValueError("At least one of --ego_data_topic or --object_list_topic must be specified")
 
     bag_dirs = [Path(b).resolve() for b in args.bag]
-    data_root = Path(args.data_dir).resolve()
-    if data_root.exists():
-        bag_dirs.extend(_discover_bags(data_root))
+    bag_root = Path(args.bag_dir).resolve()
+    if bag_root.exists():
+        bag_dirs.extend(_discover_bags(bag_root))
 
     unique = {}
     for bag in bag_dirs:
@@ -500,7 +509,7 @@ def main() -> None:
     if not bags:
         raise SystemExit("No rosbag2 directories with metadata.yaml found")
 
-    out_dir = Path(args.output_dir).resolve()
+    out_dir = Path(args.op_dir).resolve()
     map_path = Path(args.map_path).resolve() if args.map_path else None
 
     if args.fixed_frame == "map" and map_path and not map_path.exists():
