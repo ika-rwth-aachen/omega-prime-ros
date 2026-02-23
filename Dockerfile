@@ -65,16 +65,15 @@ RUN mkdir -p /opt/omega-prime-ros
 COPY ros_to_omega_prime.py /opt/omega-prime-ros/ros_to_omega_prime.py
 
 # Convenience entrypoint to ensure ROS env is sourced
-ADD <<'EOS' /ros_entrypoint.sh
-#!/bin/bash
-set -e
-source /opt/ros/${ROS_DISTRO}/setup.bash
-if [ -f /opt/ws/install/setup.bash ]; then
-  source /opt/ws/install/setup.bash
-fi
-exec "$@"
-EOS
-RUN chmod +x /ros_entrypoint.sh
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -e' \
+    'source /opt/ros/${ROS_DISTRO}/setup.bash' \
+    'if [ -f /opt/ws/install/setup.bash ]; then' \
+    '  source /opt/ws/install/setup.bash' \
+    'fi' \
+    'exec "$@"' \
+    > /ros_entrypoint.sh && chmod +x /ros_entrypoint.sh
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["python3", "/opt/omega-prime-ros/ros_to_omega_prime.py"]
