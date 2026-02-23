@@ -1,4 +1,6 @@
-# ROS 2 Bag -> omega-prime Docker Image
+# omega-prime-ros
+
+## ROS 2 -> omega-prime 
 
 This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via PyPI), and builds perception_interfaces (messages + Python utils) from GitHub so you can export EgoData and ObjectList topics to omega-prime MCAP using the built-in converter.
 
@@ -7,9 +9,9 @@ This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via Py
 - `PERCEPTION_INTERFACES_REPO` (default GitHub repo)
 - `PERCEPTION_INTERFACES_REF` (optional): commit/branch/tag; if unset, uses the repo’s default branch
 
-## Build
+## Local Build
 ```bash
-docker build -t ros2omegaprime \
+docker build -t omega-prime-ros \
     --build-arg OMEGA_PRIME_VERSION=latest \
     --build-arg PERCEPTION_INTERFACES_REF=<commit-or-branch> \
     -f Dockerfile .
@@ -28,7 +30,7 @@ docker run --rm -it \
     -v <path/to/bags>:/data:ro \
     -v </path/to/map.xodr>:/map/map.xodr:ro \
     -v "$PWD"/out:/out \
-    ros2omegaprime
+    omega-prime-ros
 ```
 
 ## Projections and Fixed Frame

@@ -1,6 +1,7 @@
 """
-Standalone converter: read perception_msgs/ObjectList messages and perception_msgs/EgoData from ROS 2 bags
-and emit omega-prime mcap files.
+ROS 2 to omega-prime converter
+    reads perception_msgs/ObjectList messages and perception_msgs/EgoData from ROS 2 bag files
+    converts and emits omega-prime mcap files.
 
 The CLI can process specific bag directories or scan a data root for rosbag2
 folders (identified via metadata.yaml).
