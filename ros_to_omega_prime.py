@@ -114,7 +114,7 @@ def _object_to_row(obj) -> dict[str, Any]:
 
     pos = pmu.get_position(obj)
 
-    try: 
+    try:
         vel = pmu.get_velocity(obj)
     except AttributeError:
         vel = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
@@ -123,7 +123,7 @@ def _object_to_row(obj) -> dict[str, Any]:
         acc = pmu.get_acceleration(obj)
     except AttributeError:
         acc = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
-        
+
     try:
         if pmu.index_yaw(obj.state.model_id) is not None:
             yaw = pmu.get_yaw(obj)
@@ -164,10 +164,6 @@ def _object_to_row(obj) -> dict[str, Any]:
         "role": int(role),
         "subtype": int(subtype),
     }
-
-
-def _olist_to_rows(msg) -> list[dict[str, Any]]:
-    return [_object_to_row(obj) for obj in msg.objects]
 
 
 def _load_metadata(bag_dir: Path) -> dict[str, Any]:
@@ -241,16 +237,16 @@ def iter_bag_messages(
         msg_class = _get_msg_class(ego_data_topic)
         if getattr(msg_class, "__name__") == "EgoData":
             msg_cls_dict[ego_data_topic] = msg_class
-        else: 
+        else:
             raise ValueError(f"{ego_data_topic} is not of type EgoData")
-        
+
     if object_list_topic:
         msg_class = _get_msg_class(object_list_topic)
         if getattr(msg_class, "__name__") == "ObjectList":
             msg_cls_dict[object_list_topic] = msg_class
-        else: 
+        else:
             raise ValueError(f"{object_list_topic} is not of type ObjectList")
-        
+
     msg_cls_dict["/tf"] = get_message(type_map["/tf"]) if "/tf" in type_map else None
     msg_cls_dict["/tf_static"] = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
 
@@ -364,6 +360,7 @@ def convert_bag_to_omega_prime(
             projection=projections,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+
             if msg_type_name == "EgoData":
                 row = _object_to_row(msg)
                 if host_vehicle_id is None:
@@ -371,9 +368,11 @@ def convert_bag_to_omega_prime(
                 yield row
                 continue
 
-            for row in _olist_to_rows(msg):
-                _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_nanos)
-                yield row
+            if msg_type_name == "ObjectList":
+                for obj in msg.objects:
+                    row = _object_to_row(obj)
+                    _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_nanos)
+                    yield row
 
     df = pl.DataFrame(row_iter())
 
@@ -513,7 +512,7 @@ def main() -> None:
     map_path = Path(args.map_path).resolve() if args.map_path else None
 
     if args.fixed_frame == "map" and map_path and not map_path.exists():
-        raise ValueError("When --fixed_frame is 'map', --map must be specified and exist")
+        raise ValueError("When --fixed_frame is 'map', --map must be specified")
 
     for bag in bags:
         if map_path and map_path.exists():
@@ -521,14 +520,14 @@ def main() -> None:
         else:
             print(f"[ros_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
         out_file = convert_bag_to_omega_prime(
-            bag,
-            args.object_list_topic,
-            out_dir,
-            args.fixed_frame,
-            args.id_gap,
-            args.ego_data_topic,
-            map_path,
-            args.validate,
+            bag_dir=bag,
+            object_list_topic=args.object_list_topic,
+            output_dir=out_dir,
+            fixed_frame=args.fixed_frame,
+            id_gap=args.id_gap,
+            ego_data_topic=args.ego_data_topic,
+            map_path=map_path,
+            validate=args.validate,
         )
         print(f"[ros_to_omega_prime] Wrote {out_file}")
 
