@@ -496,6 +496,9 @@ def main() -> None:
     out_dir = Path(args.output_dir).resolve()
     map_path = Path(args.map_path).resolve() if args.map_path else None
 
+    if args.fixed_frame == "map" and map_path and not map_path.exists():
+        raise ValueError("When --fixed_frame is 'map', --map must be specified and exist")
+
     for bag in bags:
         if map_path and map_path.exists():
             print(f"[ros_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}")
