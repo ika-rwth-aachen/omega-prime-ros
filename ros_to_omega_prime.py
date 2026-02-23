@@ -344,13 +344,13 @@ def convert_bag_to_omega_prime(
     object_list_topic: str | None,
     output_dir: Path,
     fixed_frame: str,
-    timeout: float,
+    id_gap: float,
     ego_data_topic: str | None,
     map_path: Path | None = None,
     validate: bool = False,
 ) -> Path:
     projections: dict[Any, Any] = {}
-    warn_gap_nanos = timeout * 1e9
+    warn_gap_nanos = id_gap * 1e9
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
 
@@ -464,10 +464,10 @@ def _parse_args() -> argparse.Namespace:
         help="Target fixed frame used for TF lookup and projection metadata (default: OP_FIXED_FRAME or utm_32N)",
     )
     parser.add_argument(
-        "--timeout",
+        "--id-gap",
         type=float,
         default=3.0,
-        help="Timeout in seconds for checking if same object is seen again",
+        help="Warning threshold in seconds if the same object ID appears again",
     )
     parser.add_argument(
         "--ego_data_topic",
@@ -516,7 +516,7 @@ def main() -> None:
             args.object_list_topic,
             out_dir,
             args.fixed_frame,
-            args.timeout,
+            args.id_gap,
             args.ego_data_topic,
             map_path,
             args.validate,
