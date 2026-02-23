@@ -18,14 +18,14 @@ docker build -t ros2omegaprime \
 
 ## Run
 - Mount your bag directory to `/data` and an output directory to `/out`.
-- EgoData is extracted automatically, set with `OP_EXTRACT_EGO=False` if this is not wanted.
-- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics in a string seperated by `;`(`"/topic1;/topic2;/topic3"`). 
+- EgoData can be extracted by setting the topic with `OP_EGO_TOPIC`.
+- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics in a string separated by `;`(`"/topic1;/topic2;/topic3"`). 
 
 ### Example:
 ```bash
 docker run --rm -it \
     -e OP_TOPIC="</your/object_list_topic1>;</your/object_list_topic2>" \
-    -e OP_EXTRACT_EGO=False \
+    -e OP_EGO_TOPIC=</your/egoData/topic> \
     -v <path/to/bags>:/data:ro \
     -v </path/to/map.xodr>:/map/map.xodr:ro \
     -v "$PWD"/out:/out \
@@ -34,7 +34,7 @@ docker run --rm -it \
 
 ## Projections and Fixed Frame
 - The converter reads `/tf` + `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `fixed_frame`.
-- The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root) of your setup, for example the global UTM/world frame. When `fixed_frame` is map, the map must be parsed and the projection string is the one of the map.
+- The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root) of your setup, for example the global UTM/world frame. When `fixed_frame` is `map`, the map must be parsed and the projection string is the one of the map.
 - These transforms are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
 - The fixed frame is converted to an EPSG projection string and written as `projections["proj_string"]`.
 - Supported fixed frame values are currently: `utm_<zone_nr: int>[N/S]` and `map`. Examples: `utm_30N`, `utm_32S`
@@ -49,7 +49,7 @@ docker run --rm -it \
   - `OP_DATA` / `--data-dir` (default `/data`)
   - `OP_OUT` / `--output-dir` (default `/out`)
   - `OP_TOPIC` / `--topic` (e.g `"/topic1"` or `"/topic1;/topic2;/topic3"` for multiple extractions)
-  - `OP_EXTRACT_EGO` / `--extract_ego` (default `True`)
+  - `OP_EGO_TOPIC` / `--ego_topic` 
   - `OP_VALIDATE` / `--validate`
   - `OP_FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
   - `--bag` to process explicit bag directories in addition to auto-discovery

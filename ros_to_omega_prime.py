@@ -198,7 +198,7 @@ def iter_bag_messages(
     bag_dir: Path,
     topic: list[str] | None,
     fixed_frame: str,
-    extract_ego: bool,
+    ego_topic: str | None,
     projection: dict[Any, Any],
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
@@ -213,21 +213,14 @@ def iter_bag_messages(
 
     msg_cls_dict = {}
 
-    ego_topic = None
-    # Get the EgoData message class and topic if requested
-    if extract_ego:
-        ego_msg_name = "perception_msgs/msg/EgoData"
-        ego_cls = get_message(ego_msg_name)
-        ego_topic_list = [name for name, t in type_map.items() if t == ego_msg_name]
-        if not ego_topic_list:
+    if ego_topic:
+        if ego_topic not in type_map:
             available = ", ".join(sorted(type_map))
-            raise RuntimeError(f"EgoData msg {ego_cls} not found in bag topics. Available topics: {available}")
-        if len(ego_topic_list) > 1:
-            print(
-                f"Warning: Multiple topics with EgoData type found: {ego_topic_list}. Using first one: {ego_topic_list[0]}"
-            )
-        ego_topic = ego_topic_list[0]
-        msg_cls_dict[ego_topic] = ego_cls
+            raise RuntimeError(f"Ego topic {ego_topic} not found. Available topics: {available}")
+        try:
+            msg_cls_dict[ego_topic] = get_message(type_map[ego_topic])
+        except Exception:
+            print(f"Warning: Could not get message class for ego topic {ego_topic}. Skipping.")
 
     if topic is not None:
         for top in topic:
@@ -333,7 +326,7 @@ def convert_bag_to_omega_prime(
     output_dir: Path,
     fixed_frame: str,
     timeout: float,
-    extract_ego: bool,
+    ego_topic: str | None,
     map_path: Path | None = None,
     validate: bool = False,
 ) -> Path:
@@ -348,7 +341,7 @@ def convert_bag_to_omega_prime(
             bag_dir,
             topic,
             fixed_frame,
-            extract_ego,
+            ego_topic,
             projection=projections,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
@@ -409,7 +402,7 @@ def _discover_bags(data_dir: Path) -> list[Path]:
 def _parse_args() -> argparse.Namespace:
     env_validate = os.environ.get("OP_VALIDATE", "").lower() in {"1", "true", "yes"}
     env_fixed_frame = os.environ.get("OP_FIXED_FRAME", "utm_32N")
-    env_extract_ego = os.environ.get("OP_EXTRACT_EGO", "true").lower() in {"1", "true", "yes"}
+    env_ego_topic = os.environ.get("OP_EGO_TOPIC", None)
     env_topic = os.environ.get("OP_TOPIC", None)
     if env_topic:
         env_topic_list = [t.strip() for t in env_topic.split(";") if t.strip()]
@@ -462,10 +455,9 @@ def _parse_args() -> argparse.Namespace:
         help="Timeout in seconds for checking if same object is seen again",
     )
     parser.add_argument(
-        "--extract_ego",
-        default=env_extract_ego,
-        action="store_true",
-        help="Extract EgoData",
+        "--ego_topic",
+        default=env_ego_topic,
+        help="Extract EgoData from topic name",
     )
     return parser.parse_args()
 
@@ -473,8 +465,8 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    if not args.extract_ego and not args.topic:
-        raise ValueError("At least one of --extract_ego or --topic must be specified")
+    if not args.ego_topic and not args.topic:
+        raise ValueError("At least one of --ego_topic or --topic must be specified")
 
     bag_dirs = [Path(b).resolve() for b in args.bag]
     data_root = Path(args.data_dir).resolve()
@@ -510,7 +502,7 @@ def main() -> None:
             out_dir,
             args.fixed_frame,
             args.timeout,
-            args.extract_ego,
+            args.ego_topic,
             map_path,
             args.validate,
         )
