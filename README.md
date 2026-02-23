@@ -18,14 +18,14 @@ docker build -t ros2omegaprime \
 
 ## Run
 - Mount your bag directory to `/data` and an output directory to `/out`.
-- EgoData can be extracted by setting the topic with `OP_EGO_TOPIC`.
-- Set the topic via `OP_TOPIC` (ObjectList topic); the container runs the export automatically. It is possible to extract multiple ObjectList topics simultaneously. Set multiple topics in a string separated by `;`(`"/topic1;/topic2;/topic3"`). 
+- EgoData can be extracted by setting the topic with `OP_EGO_DATA_TOPIC`.
+- Set the topic via `OP_OBJECT_LIST_TOPIC` (ObjectList topic); the container runs the export automatically. 
 
 ### Example:
 ```bash
 docker run --rm -it \
-    -e OP_TOPIC="</your/object_list_topic1>;</your/object_list_topic2>" \
-    -e OP_EGO_TOPIC=</your/egoData/topic> \
+    -e OP_OBJECT_LIST_TOPIC=</your/object_list_topic> \
+    -e OP_EGO_DATA_TOPIC=</your/egoData/topic> \
     -v <path/to/bags>:/data:ro \
     -v </path/to/map.xodr>:/map/map.xodr:ro \
     -v "$PWD"/out:/out \
@@ -48,8 +48,8 @@ docker run --rm -it \
 - Env vars / CLI flags:
   - `OP_DATA` / `--data-dir` (default `/data`)
   - `OP_OUT` / `--output-dir` (default `/out`)
-  - `OP_TOPIC` / `--topic` (e.g `"/topic1"` or `"/topic1;/topic2;/topic3"` for multiple extractions)
-  - `OP_EGO_TOPIC` / `--ego_topic` 
+  - `OP_OBJECT_LIST_TOPIC` / `--object_list_topic`
+  - `OP_EGO_DATA_TOPIC` / `--ego_data_topic`
   - `OP_VALIDATE` / `--validate`
   - `OP_FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
   - `--bag` to process explicit bag directories in addition to auto-discovery

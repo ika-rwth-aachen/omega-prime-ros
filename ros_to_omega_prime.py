@@ -209,9 +209,9 @@ def _storage_id(meta: dict[str, Any]) -> str:
 
 def iter_bag_messages(
     bag_dir: Path,
-    topic: list[str] | None,
+    object_list_topic: str | None,
     fixed_frame: str,
-    ego_topic: str | None,
+    ego_data_topic: str | None,
     projection: dict[Any, Any],
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
@@ -226,25 +226,30 @@ def iter_bag_messages(
 
     msg_cls_dict = {}
 
-    if ego_topic:
-        if ego_topic not in type_map:
+    def _get_msg_class(topic_name: str) -> Any:
+        if topic_name not in type_map:
             available = ", ".join(sorted(type_map))
-            raise RuntimeError(f"Ego topic {ego_topic} not found. Available topics: {available}")
+            raise RuntimeError(f"Topic {topic_name} not found. Available topics: {available}")
         try:
-            msg_cls_dict[ego_topic] = get_message(type_map[ego_topic])
+            return get_message(type_map[topic_name])
         except Exception:
-            print(f"Warning: Could not get message class for ego topic {ego_topic}. Skipping.")
+            print(f"Warning: Could not get message class for topic {topic_name}. Skipping.")
+            return None
 
-    if topic is not None:
-        for top in topic:
-            if top not in type_map:
-                available = ", ".join(sorted(type_map))
-                raise RuntimeError(f"Topic {top} not found. Available topics: {available}")
-            try:
-                msg_cls_dict[top] = get_message(type_map[top])
-            except Exception:
-                print(f"Warning: Could not get message class for topic {top}. Skipping.")
-
+    if ego_data_topic:
+        msg_class = _get_msg_class(ego_data_topic)
+        if getattr(msg_class, "__name__") == "EgoData":
+            msg_cls_dict[ego_data_topic] = msg_class
+        else: 
+            raise ValueError(f"{ego_data_topic} is not of type EgoData")
+        
+    if object_list_topic:
+        msg_class = _get_msg_class(object_list_topic)
+        if getattr(msg_class, "__name__") == "ObjectList":
+            msg_cls_dict[object_list_topic] = msg_class
+        else: 
+            raise ValueError(f"{object_list_topic} is not of type ObjectList")
+        
     msg_cls_dict["/tf"] = get_message(type_map["/tf"]) if "/tf" in type_map else None
     msg_cls_dict["/tf_static"] = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
 
@@ -335,11 +340,11 @@ def _warn_if_reappearing_id(
 
 def convert_bag_to_omega_prime(
     bag_dir: Path,
-    topic: list[str] | None,
+    object_list_topic: str | None,
     output_dir: Path,
     fixed_frame: str,
     timeout: float,
-    ego_topic: str | None,
+    ego_data_topic: str | None,
     map_path: Path | None = None,
     validate: bool = False,
 ) -> Path:
@@ -352,9 +357,9 @@ def convert_bag_to_omega_prime(
         nonlocal host_vehicle_id
         for msg, msg_type in iter_bag_messages(
             bag_dir,
-            topic,
+            object_list_topic,
             fixed_frame,
-            ego_topic,
+            ego_data_topic,
             projection=projections,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
@@ -415,12 +420,8 @@ def _discover_bags(data_dir: Path) -> list[Path]:
 def _parse_args() -> argparse.Namespace:
     env_validate = os.environ.get("OP_VALIDATE", "").lower() in {"1", "true", "yes"}
     env_fixed_frame = os.environ.get("OP_FIXED_FRAME", "utm_32N")
-    env_ego_topic = os.environ.get("OP_EGO_TOPIC", None)
-    env_topic = os.environ.get("OP_TOPIC", None)
-    if env_topic:
-        env_topic_list = [t.strip() for t in env_topic.split(";") if t.strip()]
-    else:
-        env_topic_list = None
+    env_ego_data_topic = os.environ.get("OP_EGO_DATA_TOPIC", None)
+    env_object_list_topic = os.environ.get("OP_OBJECT_LIST_TOPIC", None)
 
     parser = argparse.ArgumentParser(description="Convert ROS 2 ObjectList bags to omega-prime MCAP")
     parser.add_argument(
@@ -429,8 +430,8 @@ def _parse_args() -> argparse.Namespace:
         help="Directory containing rosbag2 folders",
     )
     parser.add_argument(
-        "--topic",
-        default=env_topic_list if env_topic and env_topic_list else None,
+        "--object_list_topic",
+        default=env_object_list_topic,
         help="ObjectList topic to export",
     )
     parser.add_argument(
@@ -468,9 +469,9 @@ def _parse_args() -> argparse.Namespace:
         help="Timeout in seconds for checking if same object is seen again",
     )
     parser.add_argument(
-        "--ego_topic",
-        default=env_ego_topic,
-        help="Extract EgoData from topic name",
+        "--ego_data_topic",
+        default=env_ego_data_topic,
+        help="EgoData topic to export",
     )
     return parser.parse_args()
 
@@ -478,8 +479,8 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
 
-    if not args.ego_topic and not args.topic:
-        raise ValueError("At least one of --ego_topic or --topic must be specified")
+    if not args.ego_data_topic and not args.object_list_topic:
+        raise ValueError("At least one of --ego_data_topic or --object_list_topic must be specified")
 
     bag_dirs = [Path(b).resolve() for b in args.bag]
     data_root = Path(args.data_dir).resolve()
@@ -511,11 +512,11 @@ def main() -> None:
             print(f"[ros_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
         out_file = convert_bag_to_omega_prime(
             bag,
-            args.topic,
+            args.object_list_topic,
             out_dir,
             args.fixed_frame,
             args.timeout,
-            args.ego_topic,
+            args.ego_data_topic,
             map_path,
             args.validate,
         )
