@@ -95,26 +95,39 @@ def _class_to_osi(obj) -> tuple[int, int, int]:
 def _object_to_row(obj) -> dict[str, Any]:
     total_nanos = Time.from_msg(obj.state.header.stamp).nanoseconds
 
-    pos = pmu.get_position(obj)
-    vel = pmu.get_velocity(obj)
-    acc = pmu.get_acceleration(obj)
+    obj_type_name = getattr(type(obj), "__name__", str(type(obj)))
 
-    try:
+    if obj_type_name == "Object":
         idx = int(obj.id)
-    except AttributeError:
-        idx = int(obj.vehicle_id)
-
-    try:
         width = float(pmu.get_width(obj))
         length = float(pmu.get_length(obj))
         height = float(pmu.get_height(obj))
-    except (AttributeError, pmu.UnknownStateEntryError):
+
+    elif obj_type_name == "EgoData":
+        idx = int(obj.vehicle_id)
         width = float(obj.width)
         length = float(obj.length)
         height = float(obj.height)
+    else:
+        raise ValueError(f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData.")
 
-    yaw = pmu.get_yaw(obj)
-    # pitch and roll might not be available
+    pos = pmu.get_position(obj)
+
+    try: 
+        vel = pmu.get_velocity(obj)
+    except AttributeError:
+        vel = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
+
+    try:
+        acc = pmu.get_acceleration(obj)
+    except AttributeError:
+        acc = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
+        
+    try:
+        if pmu.index_yaw(obj.state.model_id) is not None:
+            yaw = pmu.get_yaw(obj)
+    except pmu.UnknownStateEntryError:
+        yaw = 0.0
     try:
         if pmu.index_roll(obj.state.model_id) is not None:
             roll = pmu.get_roll(obj)
