@@ -9,7 +9,6 @@ This image bundles ROS 2 Jazzy, its rosbag2 Python bindings, omega-prime (via Py
 
 ## Build
 ```bash
-# Run from omega-prime root directory
 docker build -t ros2omegaprime \
     --build-arg OMEGA_PRIME_VERSION=latest \
     --build-arg PERCEPTION_INTERFACES_REF=<commit-or-branch> \
