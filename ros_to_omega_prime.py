@@ -324,29 +324,28 @@ def iter_bag_messages(
 def _warn_if_reappearing_id(
     row: dict[str, Any],
     last_seen_by_idx: dict[int, int],
-    warn_gap_nanos: float,
+    warn_gap_seconds: float,
 ) -> None:
     idx = int(row["idx"])
     total_nanos = int(row["total_nanos"])
     if idx in last_seen_by_idx:
-        dt_nanos = total_nanos - last_seen_by_idx[idx]
-        if dt_nanos > warn_gap_nanos:
-            print(f"Warning: ID {idx} found again after {dt_nanos / 1e9:.3f} seconds.")
+        dt_seconds = (total_nanos - last_seen_by_idx[idx]) / 1e9
+        if dt_seconds > warn_gap_seconds:
+            print(f"Warning: ID {idx} found again after {dt_seconds:.3f} seconds.")
     last_seen_by_idx[idx] = total_nanos
 
 
 def convert_bag_to_omega_prime(
     bag_dir: Path,
-    object_list_topic: str | None,
     output_dir: Path,
-    fixed_frame: str,
-    id_gap: float,
     ego_data_topic: str | None,
+    object_list_topic: str | None,
+    fixed_frame: str,
     map_path: Path | None = None,
     validate: bool = False,
+    warn_gap_seconds: float = 3.0,
 ) -> Path:
     projections: dict[Any, Any] = {}
-    warn_gap_nanos = id_gap * 1e9
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
 
@@ -371,7 +370,7 @@ def convert_bag_to_omega_prime(
             if msg_type_name == "ObjectList":
                 for obj in msg.objects:
                     row = _object_to_row(obj)
-                    _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_nanos)
+                    _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
                     yield row
 
     df = pl.DataFrame(row_iter())
@@ -418,19 +417,19 @@ def _discover_bags(data_dir: Path) -> list[Path]:
 
 
 def _parse_args() -> argparse.Namespace:
-    env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
-    env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
-    env_ego_data_topic = os.environ.get("EGO_DATA_TOPIC", None)
-    env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
     env_bag_dir = os.environ.get("BAG_DIR", "/input")
     env_op_dir = os.environ.get("OP_DIR", "/output")
+    env_ego_data_topic = os.environ.get("EGO_DATA_TOPIC", None)
+    env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
+    env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
     env_map = os.environ.get("MAP", "/map/map.xodr")
     env_bag = [p.strip() for p in os.environ.get("BAG", "").split(",") if p.strip()]
-    env_id_gap_raw = os.environ.get("ID_GAP", "3.0")
+    env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
+    env_warn_gap_seconds_raw = os.environ.get("WARN_GAP_SECONDS", "3.0")
     try:
-        env_id_gap = float(env_id_gap_raw)
+        env_warn_gap_seconds = float(env_warn_gap_seconds_raw)
     except ValueError as exc:
-        raise ValueError(f"ID_GAP must be a float, got {env_id_gap_raw!r}") from exc
+        raise ValueError(f"WARN_GAP_SECONDS must be a float, got {env_warn_gap_seconds_raw!r}") from exc
 
     parser = argparse.ArgumentParser(description="Convert ROS 2 ObjectList bags to omega-prime MCAP")
     parser.add_argument(
@@ -439,20 +438,24 @@ def _parse_args() -> argparse.Namespace:
         help="Directory containing rosbag2 folders (default: BAG_DIR or /input)",
     )
     parser.add_argument(
-        "--object_list_topic",
-        default=env_object_list_topic,
-        help="ObjectList topic to export",
-    )
-    parser.add_argument(
         "--op-dir",
         default=env_op_dir,
         help="Directory to write omega-prime mcap files (default: OP_DIR or /output)",
     )
     parser.add_argument(
-        "--bag",
-        action="append",
-        default=env_bag,
-        help="Explicit bag directory to convert (repeatable, or comma-separated via BAG)",
+        "--ego_data_topic",
+        default=env_ego_data_topic,
+        help="EgoData topic to export",
+    )
+    parser.add_argument(
+        "--object_list_topic",
+        default=env_object_list_topic,
+        help="ObjectList topic to export",
+    )
+    parser.add_argument(
+        "--fixed_frame",
+        default=env_fixed_frame,
+        help="Target fixed frame used for TF lookup and projection metadata (default: FIXED_FRAME or utm_32N)",
     )
     parser.add_argument(
         "--map",
@@ -461,26 +464,22 @@ def _parse_args() -> argparse.Namespace:
         help="Optional OpenDRIVE map to embed (default: MAP or /map/map.xodr)",
     )
     parser.add_argument(
+        "--bag",
+        action="append",
+        default=env_bag,
+        help="Explicit bag directory to convert (repeatable, or comma-separated via BAG)",
+    )
+    parser.add_argument(
         "--validate",
         action="store_true",
         default=env_validate,
         help="Enable omega-prime schema validation",
     )
     parser.add_argument(
-        "--fixed_frame",
-        default=env_fixed_frame,
-        help="Target fixed frame used for TF lookup and projection metadata (default: FIXED_FRAME or utm_32N)",
-    )
-    parser.add_argument(
-        "--id-gap",
+        "--warn-gap-seconds",
         type=float,
-        default=env_id_gap,
-        help="Warning threshold in seconds if the same object ID appears again (default: ID_GAP or 3.0)",
-    )
-    parser.add_argument(
-        "--ego_data_topic",
-        default=env_ego_data_topic,
-        help="EgoData topic to export",
+        default=env_warn_gap_seconds,
+        help="Warning threshold in seconds if the same object ID appears again (default: WARN_GAP_SECONDS or 3.0)",
     )
     return parser.parse_args()
 
@@ -521,13 +520,13 @@ def main() -> None:
             print(f"[ros_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
         out_file = convert_bag_to_omega_prime(
             bag_dir=bag,
-            object_list_topic=args.object_list_topic,
             output_dir=out_dir,
-            fixed_frame=args.fixed_frame,
-            id_gap=args.id_gap,
             ego_data_topic=args.ego_data_topic,
+            object_list_topic=args.object_list_topic,
+            fixed_frame=args.fixed_frame,
             map_path=map_path,
             validate=args.validate,
+            warn_gap_seconds=args.warn_gap_seconds,
         )
         print(f"[ros_to_omega_prime] Wrote {out_file}")
 

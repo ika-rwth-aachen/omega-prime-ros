@@ -9,7 +9,7 @@ Use the Docker image to run the converter automatically. It will discovers `rosb
 1. Build or pull the `omega-prime-ros` image
 1. Mount your ROS bag folder to `/input`
 1. Mount an output directory to `/output`
-1. Set at least one topic (`OBJECT_LIST_TOPIC` and/or `EGO_DATA_TOPIC`)
+1. Set at least one topic (`EGO_DATA_TOPIC` and/or `OBJECT_LIST_TOPIC`)
 1. Optionally mount `/map/map.xodr` to embed OpenDRIVE map data
 1. Run the container
 
@@ -34,7 +34,7 @@ Environment variables and CLI flags:
 - `MAP` / `--map` (default `/map/map.xodr`)
 - `BAG` / `--bag` to process explicit bags (supports comma-separated paths)
 - `VALIDATE` / `--validate` enable omega-prime schema validation
-- `ID_GAP` / `--id-gap` warning threshold in seconds if same object ID appears multiple times
+- `WARN_GAP_SECONDS` / `--warn-gap-seconds` warning threshold in seconds if same object ID appears multiple times
 
 ### Notes
 
