@@ -62,7 +62,7 @@ RUN python -m pip install --upgrade pip && \
 
 # Include the converter inside the image
 RUN mkdir -p /opt/omega-prime-ros
-COPY ros_to_omega_prime.py /opt/omega-prime-ros/ros_to_omega_prime.py
+COPY omega-prime-ros /opt/omega-prime-ros
 
 # Convenience entrypoint to ensure ROS env is sourced
 RUN printf '%s\n' \

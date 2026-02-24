@@ -1,6 +1,12 @@
-# omega-prime-ros
+<img src="https://github.com/ika-rwth-aachen/omega-prime-ros/blob/main/omega-prime-ros.svg?raw=True" align="left" height=120px style="margin:10px;">
 
-ROS 2 Jazzy to omega-prime MCAP export image.
+# Omega-Prime-ROS
+This repository provides a Dockerized ROS 2 conversion pipeline that exports `rosbag2` data to omega-prime `.mcap` files.
+
+It scans `rosbag2` recordings, reads EgoData and ObjectList topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
+
+## Requirements
+You need to have installed `Docker` to be able to convert ROS 2 bags to Omega-Prime MCAP files
 
 ## Usage
 
@@ -9,8 +15,8 @@ Use the Docker image to run the converter automatically. It will discovers `rosb
 1. Build or pull the `omega-prime-ros` image
 1. Mount your ROS bag folder to `/input`
 1. Mount an output directory to `/output`
-1. Set at least one topic (`EGO_DATA_TOPIC` and/or `OBJECT_LIST_TOPIC`)
 1. Optionally mount `/map/map.xodr` to embed OpenDRIVE map data
+1. Set at least one topic (`EGO_DATA_TOPIC` and/or `OBJECT_LIST_TOPIC`)
 1. Run the container
 
 ```bash
@@ -24,7 +30,6 @@ docker run --rm -it \
 ```
 
 ### CLI Description
-
 Environment variables and CLI flags:
 - `BAG_DIR` / `--bag-dir` (default `/input`)
 - `OP_DIR` / `--op-dir` (default `/output`)
@@ -37,12 +42,11 @@ Environment variables and CLI flags:
 - `WARN_GAP_SECONDS` / `--warn-gap-seconds` warning threshold in seconds if same object ID appears multiple times
 
 ### Notes
-
 - The converter scans `/input` for rosbag2 directories containing a `metadata.yaml` and writes one omega-prime `.mcap` per bag into `/output` by default.
 - For large bags, ensure sufficient RAM.
 
-## Projection Information
 
+## Projection Information
 - The converter reads `/tf` and `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `fixed_frame`.
 - The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root), for example a global UTM/world frame.
 - When `fixed_frame=map`, the map must be parsed and the map projection string is used.
@@ -51,7 +55,6 @@ Environment variables and CLI flags:
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
 
 ## Docker Image
-
 The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
 
 ### Build Args
@@ -65,3 +68,11 @@ docker build -t gitlab.ika.rwth-aachen.de:5050/fb-fi/data/omega-prime-ros:latest
     --build-arg PERCEPTION_INTERFACES_VERSION=<commit-or-branch> \
     -f Dockerfile .
 ```
+
+# Notice
+
+> [!IMPORTANT]
+> The project is open-sourced and maintained by the [**Institute for Automotive Engineering (ika) at RWTH Aachen University**](https://www.ika.rwth-aachen.de/).
+> We cover a wide variety of research topics within our [*Vehicle Intelligence & Automated Driving*](https://www.ika.rwth-aachen.de/en/competences/fields-of-research/vehicle-intelligence-automated-driving.html) domain.
+> If you would like to learn more about how we can support your automated driving or robotics efforts, feel free to reach out to us!
+> :email: ***opensource@ika.rwth-aachen.de***
