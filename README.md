@@ -1,6 +1,6 @@
 <img src="https://github.com/ika-rwth-aachen/omega-prime-ros/blob/github/omega-prime-ros.svg?raw=True" height=150px align="right" style="margin: 10px;">
 
-[![](https://img.shields.io/badge/license-MPL%202.0-blue.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/blob/master/LICENSE) 
+[![](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/blob/master/LICENSE) 
 [![](https://img.shields.io/pypi/v/omega-prime-ros.svg)](https://pypi.python.org/pypi/omega-prime-ros)
 [![](https://github.com/ika-rwth-aachen/omega-prime-ros/workflows/CI/badge.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/actions)
 [![](https://img.shields.io/pypi/pyversions/omega-prime-ros.svg)](https://pypi.python.org/pypi/omega-prime-ros/)
