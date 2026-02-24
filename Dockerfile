@@ -1,12 +1,10 @@
-ARG OMEGA_PRIME_VERSION=latest
-ARG PERCEPTION_INTERFACES_REPO=https://github.com/ika-rwth-aachen/perception_interfaces.git
-ARG PERCEPTION_INTERFACES_REF=
+ARG OMEGA_PRIME_VERSION=
+ARG PERCEPTION_INTERFACES_VERSION=
 
 FROM osrf/ros:jazzy-desktop
 
 ARG OMEGA_PRIME_VERSION
-ARG PERCEPTION_INTERFACES_REPO
-ARG PERCEPTION_INTERFACES_REF
+ARG PERCEPTION_INTERFACES_VERSION
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -33,10 +31,10 @@ RUN mkdir -p /opt/ws/src
 
 # Fetch perception_interfaces from GitHub so the image can be built standalone.
 SHELL ["/bin/bash", "-c"]
-RUN git clone ${PERCEPTION_INTERFACES_REPO} /opt/ws/src/perception_interfaces && \
-    if [ -n "${PERCEPTION_INTERFACES_REF}" ]; then \
+RUN git clone https://github.com/ika-rwth-aachen/perception_interfaces.git /opt/ws/src/perception_interfaces && \
+    if [ -n "${PERCEPTION_INTERFACES_VERSION}" ]; then \
       cd /opt/ws/src/perception_interfaces && \
-      git checkout ${PERCEPTION_INTERFACES_REF}; \
+      git checkout ${PERCEPTION_INTERFACES_VERSION}; \
     fi
 
 # Build only the required packages
@@ -56,27 +54,26 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="/opt/venv/bin:${PATH}"
 RUN python -m pip install --upgrade pip && \
     python -m pip install --upgrade scipy pyyaml transforms3d && \
-    if [ "${OMEGA_PRIME_VERSION}" = "latest" ]; then \
-      python -m pip install omega-prime; \
-    else \
+    if [ -n "${OMEGA_PRIME_VERSION}" ]; then \
       python -m pip install "omega-prime==${OMEGA_PRIME_VERSION}"; \
+    else \
+      python -m pip install omega-prime; \
     fi
 
 # Include the converter inside the image
-RUN mkdir -p /opt/ros2_conversion
-COPY tools/ros2_conversion/object_list_to_omega_prime.py /opt/ros2_conversion/object_list_to_omega_prime.py
+RUN mkdir -p /opt/omega-prime-ros
+COPY ros_to_omega_prime.py /opt/omega-prime-ros/ros_to_omega_prime.py
 
 # Convenience entrypoint to ensure ROS env is sourced
-ADD <<'EOS' /ros_entrypoint.sh
-#!/bin/bash
-set -e
-source /opt/ros/${ROS_DISTRO}/setup.bash
-if [ -f /opt/ws/install/setup.bash ]; then
-  source /opt/ws/install/setup.bash
-fi
-exec "$@"
-EOS
-RUN chmod +x /ros_entrypoint.sh
+RUN printf '%s\n' \
+    '#!/bin/bash' \
+    'set -e' \
+    'source /opt/ros/${ROS_DISTRO}/setup.bash' \
+    'if [ -f /opt/ws/install/setup.bash ]; then' \
+    '  source /opt/ws/install/setup.bash' \
+    'fi' \
+    'exec "$@"' \
+    > /ros_entrypoint.sh && chmod +x /ros_entrypoint.sh
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
-CMD ["python3", "/opt/ros2_conversion/object_list_to_omega_prime.py"]
+CMD ["python3", "/opt/omega-prime-ros/ros_to_omega_prime.py"]
