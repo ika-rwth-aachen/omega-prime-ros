@@ -26,7 +26,7 @@ docker run --rm -it \
     -v <path/to/bags>:/input \
     -v </path/to/map.xodr>:/map/map.xodr \
     -v "$PWD"/output:/output \
-    gitlab.ika.rwth-aachen.de:5050/fb-fi/data/omega-prime-ros:latest
+    ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
 ```
 
 ### CLI Description
@@ -63,7 +63,7 @@ The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, an
 
 ### Local Build
 ```bash
-docker build -t gitlab.ika.rwth-aachen.de:5050/fb-fi/data/omega-prime-ros:latest \
+docker build -t ghcr.io/ika-rwth-aachen/omega-prime-ros:latest \
     --build-arg OMEGA_PRIME_VERSION=latest \
     --build-arg PERCEPTION_INTERFACES_VERSION=<commit-or-branch> \
     -f Dockerfile .
