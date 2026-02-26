@@ -75,6 +75,18 @@ docker build -t ghcr.io/ika-rwth-aachen/omega-prime-ros:latest \
     -f Dockerfile .
 ```
 
+# Acknowledgements
+
+This package is developed as part of the [SYNERGIES project](https://synergies-ccam.eu).
+
+<img src="https://raw.githubusercontent.com/ika-rwth-aachen/omega-prime/refs/heads/main/docs/synergies.svg"
+style="width:2in" />
+
+Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor the granting authority can be held responsible for them. 
+
+<img src="https://raw.githubusercontent.com/ika-rwth-aachen/omega-prime/refs/heads/main/docs/funded_by_eu.svg"
+style="width:4in" />
+
 # Notice
 
 > [!IMPORTANT]
