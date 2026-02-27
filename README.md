@@ -11,6 +11,8 @@ This repository provides a Dockerized ROS 2 conversion pipeline that exports `ro
 
 It scans `rosbag2` recordings, reads EgoData and ObjectList topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
 
+For further processing of resulting omega-prime files, see the main [omega-prime repository](https://github.com/ika-rwth-aachen/omega-prime).
+
 ## Requirements
 You need to have installed `Docker` to be able to convert ROS 2 bags to Omega-Prime MCAP files
 
