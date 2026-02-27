@@ -1,6 +1,18 @@
-# omega-prime-ros
+<img src="https://github.com/ika-rwth-aachen/omega-prime-ros/blob/main/omega-prime-ros.svg?raw=True" height=150px align="right" style="margin: 10px;">
 
-ROS 2 Jazzy to omega-prime MCAP export image.
+[![](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/blob/master/LICENSE) 
+[![](https://github.com/ika-rwth-aachen/omega-prime-ros/workflows/CI/badge.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/actions)
+[![](https://img.shields.io/github/issues-raw/ika-rwth-aachen/omega-prime-ros.svg)](https://github.com/ika-rwth-aachen/omega-prime-ros/issues)
+
+# Omega-Prime-ROS
+This repository provides a Dockerized ROS 2 conversion pipeline that exports `rosbag2` data to omega-prime `.mcap` files.
+
+The conversion pipeline is based on the [perception_interfaces](https://github.com/ika-rwth-aachen/perception_interfaces). It scans `rosbag2` recordings, reads [EgoData](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/EgoData.msg) and [ObjectList](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/ObjectList.msg) topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
+
+For further processing of resulting omega-prime files, see the main [omega-prime repository](https://github.com/ika-rwth-aachen/omega-prime).
+
+## Requirements
+You need to have installed `Docker` to be able to convert ROS 2 bags to Omega-Prime MCAP files
 
 ## Usage
 
@@ -9,8 +21,8 @@ Use the Docker image to run the converter automatically. It will discovers `rosb
 1. Build or pull the `omega-prime-ros` image
 1. Mount your ROS bag folder to `/input`
 1. Mount an output directory to `/output`
-1. Set at least one topic (`EGO_DATA_TOPIC` and/or `OBJECT_LIST_TOPIC`)
 1. Optionally mount `/map/map.xodr` to embed OpenDRIVE map data
+1. Set at least one topic (`EGO_DATA_TOPIC` and/or `OBJECT_LIST_TOPIC`)
 1. Run the container
 
 ```bash
@@ -20,11 +32,25 @@ docker run --rm -it \
     -v <path/to/bags>:/input \
     -v </path/to/map.xodr>:/map/map.xodr \
     -v "$PWD"/output:/output \
-    gitlab.ika.rwth-aachen.de:5050/fb-fi/data/omega-prime-ros:latest
+    ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
 ```
 
-### CLI Description
+### Example
 
+We provide an examplaric [ROS 2 bag file](./example/rosbag2_2026_02_27-10_31_09/) from simulation, which can be used to generate an omega-prime file.
+
+```bash
+docker run --rm \
+    -e EGO_DATA_TOPIC=/simulation/ego_data \
+    -e OBJECT_LIST_TOPIC=/simulation/object_list \
+    -v "$PWD"/test:/input \
+    -v "$PWD"/output:/output \
+    ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
+```
+
+The converter writes an `.omega-prime.mcap` file to the `output/` directory.
+
+### CLI Description
 Environment variables and CLI flags:
 - `BAG_DIR` / `--bag-dir` (default `/input`)
 - `OP_DIR` / `--op-dir` (default `/output`)
@@ -37,12 +63,11 @@ Environment variables and CLI flags:
 - `WARN_GAP_SECONDS` / `--warn-gap-seconds` warning threshold in seconds if same object ID appears multiple times
 
 ### Notes
-
 - The converter scans `/input` for rosbag2 directories containing a `metadata.yaml` and writes one omega-prime `.mcap` per bag into `/output` by default.
 - For large bags, ensure sufficient RAM.
 
-## Projection Information
 
+## Projection Information
 - The converter reads `/tf` and `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `fixed_frame`.
 - The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root), for example a global UTM/world frame.
 - When `fixed_frame=map`, the map must be parsed and the map projection string is used.
@@ -51,8 +76,7 @@ Environment variables and CLI flags:
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
 
 ## Docker Image
-
-The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
+The provided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
 
 ### Build Args
 - `OMEGA_PRIME_VERSION` (default `latest`): PyPI version to install
@@ -60,8 +84,28 @@ The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, an
 
 ### Local Build
 ```bash
-docker build -t gitlab.ika.rwth-aachen.de:5050/fb-fi/data/omega-prime-ros:latest \
+docker build -t ghcr.io/ika-rwth-aachen/omega-prime-ros:latest \
     --build-arg OMEGA_PRIME_VERSION=latest \
     --build-arg PERCEPTION_INTERFACES_VERSION=<commit-or-branch> \
     -f Dockerfile .
 ```
+
+# Acknowledgements
+
+This package is developed as part of the [SYNERGIES project](https://synergies-ccam.eu).
+
+<img src="https://raw.githubusercontent.com/ika-rwth-aachen/omega-prime/refs/heads/main/docs/synergies.svg"
+style="width:2in" />
+
+Funded by the European Union. Views and opinions expressed are however those of the author(s) only and do not necessarily reflect those of the European Union or European Climate, Infrastructure and Environment Executive Agency (CINEA). Neither the European Union nor the granting authority can be held responsible for them. 
+
+<img src="https://raw.githubusercontent.com/ika-rwth-aachen/omega-prime/refs/heads/main/docs/funded_by_eu.svg"
+style="width:4in" />
+
+# Notice
+
+> [!IMPORTANT]
+> The project is open-sourced and maintained by the [**Institute for Automotive Engineering (ika) at RWTH Aachen University**](https://www.ika.rwth-aachen.de/).
+> We cover a wide variety of research topics within our [*Vehicle Intelligence & Automated Driving*](https://www.ika.rwth-aachen.de/en/competences/fields-of-research/vehicle-intelligence-automated-driving.html) domain.
+> If you would like to learn more about how we can support your automated driving or robotics efforts, feel free to reach out to us!
+> Contact: [opensource@ika.rwth-aachen.de](mailto:opensource@ika.rwth-aachen.de)
