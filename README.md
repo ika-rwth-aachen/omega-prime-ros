@@ -9,7 +9,7 @@
 # Omega-Prime-ROS
 This repository provides a Dockerized ROS 2 conversion pipeline that exports `rosbag2` data to omega-prime `.mcap` files.
 
-It scans `rosbag2` recordings, reads [EgoData](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/EgoData.msg) and [ObjectList](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/ObjectList.msg) topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
+The conversion pipeline is based on the [perception_interfaces](https://github.com/ika-rwth-aachen/perception_interfaces). It scans `rosbag2` recordings, reads [EgoData](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/EgoData.msg) and [ObjectList](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/ObjectList.msg) topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
 
 For further processing of resulting omega-prime files, see the main [omega-prime repository](https://github.com/ika-rwth-aachen/omega-prime).
 
@@ -63,7 +63,7 @@ Environment variables and CLI flags:
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
 
 ## Docker Image
-The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds [`perception_interfaces`](https://github.com/ika-rwth-aachen/perception_interfaces) from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
+The provided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
 
 ### Build Args
 - `OMEGA_PRIME_VERSION` (default `latest`): PyPI version to install
