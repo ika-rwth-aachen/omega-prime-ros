@@ -63,7 +63,7 @@ Environment variables and CLI flags:
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
 
 ## Docker Image
-The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
+The probided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds [`perception_interfaces`](https://github.com/ika-rwth-aachen/perception_interfaces) from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
 
 ### Build Args
 - `OMEGA_PRIME_VERSION` (default `latest`): PyPI version to install
