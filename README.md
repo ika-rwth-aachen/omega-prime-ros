@@ -37,6 +37,21 @@ docker run --rm -it \
     ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
 ```
 
+### Example
+
+We provide an examplaric [ROS 2 bag file](./example/rosbag2_2026_02_27-10_31_09/) from simulation, which can be used to generate an omega-prime file.
+
+```bash
+docker run --rm \
+    -e EGO_DATA_TOPIC=/simulation/ego_data \
+    -e OBJECT_LIST_TOPIC=/simulation/object_list \
+    -v "$PWD"/test:/input \
+    -v "$PWD"/output:/output \
+    ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
+```
+
+The converter writes an `.omega-prime.mcap` file to the `output/` directory.
+
 ### CLI Description
 Environment variables and CLI flags:
 - `BAG_DIR` / `--bag-dir` (default `/input`)

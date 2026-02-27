@@ -38,6 +38,29 @@ jobs:
       - name: Verify Python compilation
         run: python -m compileall -q omega-prime-ros
 
+      - name: Build Docker image for smoke test
+        run: docker build -t omega-prime-ros:ci -f Dockerfile .
+
+      - name: Run conversion smoke test
+        run: |
+          rm -rf "$PWD/output-ci"
+          mkdir -p "$PWD/output-ci"
+
+          docker run --rm \
+            -e EGO_DATA_TOPIC=/simulation/ego_data \
+            -e OBJECT_LIST_TOPIC=/simulation/object_list \
+            -v "$PWD/example:/input" \
+            -v "$PWD/output-ci:/output" \
+            omega-prime-ros:ci
+
+          out_file="$(find "$PWD/output-ci" -maxdepth 1 -name '*.omega-prime.mcap' -type f -print -quit)"
+          if [ -z "$out_file" ]; then
+            echo "No omega-prime output generated"
+            exit 1
+          fi
+
+          test -s "$out_file"
+
 
   docker-build-and-publish:
     runs-on: ubuntu-latest
