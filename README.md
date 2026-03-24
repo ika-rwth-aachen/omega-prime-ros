@@ -43,7 +43,7 @@ We provide an examplaric [ROS 2 bag file](./example/rosbag2_2026_02_27-10_31_09/
 docker run --rm \
     -e EGO_DATA_TOPIC=/simulation/ego_data \
     -e OBJECT_LIST_TOPIC=/simulation/object_list \
-    -v "$PWD"/test:/input \
+    -v "$PWD"/example:/input \
     -v "$PWD"/output:/output \
     ghcr.io/ika-rwth-aachen/omega-prime-ros:latest
 ```

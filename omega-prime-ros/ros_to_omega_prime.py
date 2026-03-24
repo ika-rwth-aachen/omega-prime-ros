@@ -124,6 +124,10 @@ def _object_to_row(obj) -> dict[str, Any]:
     except AttributeError:
         acc = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
 
+    yaw = 0.0
+    roll = 0.0
+    pitch = 0.0
+
     try:
         if pmu.index_yaw(obj.state.model_id) is not None:
             yaw = pmu.get_yaw(obj)
@@ -140,6 +144,13 @@ def _object_to_row(obj) -> dict[str, Any]:
     except pmu.UnknownStateEntryError:
         pitch = 0.0
 
+    cos_yaw = math.cos(yaw)
+    sin_yaw = math.sin(yaw)
+    vel_x = vel.x * cos_yaw - vel.y * sin_yaw
+    vel_y = vel.x * sin_yaw + vel.y * cos_yaw
+    acc_x = acc.x * cos_yaw - acc.y * sin_yaw
+    acc_y = acc.x * sin_yaw + acc.y * cos_yaw
+
     mot, role, subtype = _class_to_osi(obj)
 
     return {
@@ -148,11 +159,11 @@ def _object_to_row(obj) -> dict[str, Any]:
         "x": float(pos.x),
         "y": float(pos.y),
         "z": float(getattr(pos, "z", 0.0)),
-        "vel_x": float(vel.x),
-        "vel_y": float(vel.y),
+        "vel_x": float(vel_x),
+        "vel_y": float(vel_y),
         "vel_z": float(getattr(vel, "z", 0.0)),
-        "acc_x": float(acc.x),
-        "acc_y": float(acc.y),
+        "acc_x": float(acc_x),
+        "acc_y": float(acc_y),
         "acc_z": float(getattr(acc, "z", 0.0)),
         "length": length,
         "width": width,
