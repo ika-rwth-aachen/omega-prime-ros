@@ -112,7 +112,7 @@ def _object_to_row(obj) -> dict[str, Any]:
     else:
         raise ValueError(f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData.")
 
-    pos = pmu.get_position(obj)
+    pos = pmu.get_center_position(obj)
 
     try:
         vel = pmu.get_velocity(obj)
