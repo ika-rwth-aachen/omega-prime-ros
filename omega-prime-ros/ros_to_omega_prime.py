@@ -221,6 +221,7 @@ def iter_bag_messages(
     fixed_frame: str,
     ego_data_topic: str | None,
     projection: dict[Any, Any],
+    unresolved_timestamps: set[int] | None = None,
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
     storage_id = _storage_id(metadata)
@@ -328,6 +329,11 @@ def iter_bag_messages(
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
     retry_pending()
+    unresolved_ts = {int(st.nanoseconds) for st, _ in pending}
+    if unresolved_timestamps is not None:
+        unresolved_timestamps.clear()
+        unresolved_timestamps.update(unresolved_ts)
+
     if pending:
         print(f"Warning: {len(pending)} messages could not be resolved to a projection frame at the end of processing.")
 
@@ -357,6 +363,7 @@ def convert_bag_to_omega_prime(
     warn_gap_seconds: float = 3.0,
 ) -> Path:
     projections: dict[Any, Any] = {}
+    unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
 
@@ -368,6 +375,7 @@ def convert_bag_to_omega_prime(
             fixed_frame,
             ego_data_topic,
             projection=projections,
+            unresolved_timestamps=unresolved_projection_timestamps,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
 
@@ -385,6 +393,13 @@ def convert_bag_to_omega_prime(
                     yield row
 
     df = pl.DataFrame(row_iter())
+    if unresolved_projection_timestamps:
+        unresolved_ts = sorted(unresolved_projection_timestamps)
+        unresolved_expr = pl.col("total_nanos").is_in(unresolved_ts)
+        removed_rows = int(df.select(unresolved_expr.cast(pl.Int64).sum()).item() or 0)
+        df = df.filter(~unresolved_expr)
+        if removed_rows > 0:
+            print(f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry.")
 
     if fixed_frame == "map":
         if map_path and map_path.exists():
