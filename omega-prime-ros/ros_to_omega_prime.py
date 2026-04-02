@@ -236,6 +236,7 @@ def iter_bag_messages(
     bag_dir: Path,
     object_list_topic: str | None,
     fixed_frame: str,
+    projection_frame: str,
     ego_data_topic: str | None,
     projection: dict[Any, Any],
     unresolved_timestamps: set[int] | None = None,
@@ -379,6 +380,7 @@ def convert_bag_to_omega_prime(
     ego_data_topic: str | None,
     object_list_topic: str | None,
     fixed_frame: str,
+    projection_frame: str,
     map_path: Path | None = None,
     validate: bool = False,
     warn_gap_seconds: float = 3.0,
@@ -394,6 +396,7 @@ def convert_bag_to_omega_prime(
             bag_dir,
             object_list_topic,
             fixed_frame,
+            projection_frame,
             ego_data_topic,
             projection=projections,
             unresolved_timestamps=unresolved_projection_timestamps,
@@ -469,6 +472,7 @@ def _parse_args() -> argparse.Namespace:
     env_ego_data_topic = os.environ.get("EGO_DATA_TOPIC", None)
     env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
     env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
+    env_projection_frame = os.environ.get("PROJECTION_FRAME", "map")
     env_map = os.environ.get("MAP", "/map/map.xodr")
     env_bag = [p.strip() for p in os.environ.get("BAG", "").split(",") if p.strip()]
     env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
@@ -503,6 +507,11 @@ def _parse_args() -> argparse.Namespace:
         "--fixed_frame",
         default=env_fixed_frame,
         help="Target fixed frame used for TF lookup and projection metadata (default: FIXED_FRAME or utm_32N)",
+    )
+    parser.add_argument(
+        "--projection_frame",
+        default=env_projection_frame,
+        help="Data gets transformed into this frame (default: PROJECTION_FRAME or None)",
     )
     parser.add_argument(
         "--map",
@@ -571,6 +580,7 @@ def main() -> None:
             ego_data_topic=args.ego_data_topic,
             object_list_topic=args.object_list_topic,
             fixed_frame=args.fixed_frame,
+            projection_frame=args.projection_frame,
             map_path=map_path,
             validate=args.validate,
             warn_gap_seconds=args.warn_gap_seconds,
