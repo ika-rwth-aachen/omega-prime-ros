@@ -200,6 +200,23 @@ def _extract_proj_offset(msg) -> tuple[int, ProjectionOffset]:
     return ts, offset
 
 
+def check_object_consistency(msg) -> None:
+    """Check that all objects in an ObjectList message have the same timestamp and frame_id as the header."""
+    if not hasattr(msg, "objects"):
+        return
+
+    header_stamp = msg.header.stamp if hasattr(msg, "header") else None
+    header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
+
+    for obj in msg.objects:
+        obj_stamp = obj.state.header.stamp if hasattr(obj.state, "header") else None
+        obj_frame_id = obj.state.header.frame_id if hasattr(obj.state, "header") else None
+
+        if header_stamp != obj_stamp:
+            print(f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}")
+        if header_frame_id != obj_frame_id:
+            print(f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}")
+
 def _yaw_from_quaternion(rotation) -> float:
     # Source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#:~:text=1%5D-,Quaternion%20to%20angles%20%28in%20ZYX%20sequence%29%20conversion
     x = float(rotation.x if hasattr(rotation, "x") else 0.0)
@@ -319,6 +336,10 @@ def iter_bag_messages(
             continue
 
         msg_frame_id = msg.header.frame_id
+        
+        if getattr(msg_cls_dict.get(topic_name), "__name__") == "ObjectList": 
+            check_object_consistency(msg)
+        
         stamp = msg.header.stamp if hasattr(msg, "header") else None
         if stamp is not None:
             stamp_time = Time.from_msg(stamp)
