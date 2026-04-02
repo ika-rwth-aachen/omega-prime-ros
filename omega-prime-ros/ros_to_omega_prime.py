@@ -300,6 +300,13 @@ def iter_bag_messages(
         stamp_time: Time,
         msg_frame_id: str,
     ) -> Any | None:
+        projection_to_fixed = None
+        if projection_frame != fixed_frame:
+            try:
+                projection_to_fixed = buffer.lookup_transform(fixed_frame, projection_frame, stamp_time)
+            except TransformException:
+                return None
+
         # 1) Transform data to projection frame if needed.
         if msg_frame_id == projection_frame:
             transformed_msg = msg
@@ -316,11 +323,7 @@ def iter_bag_messages(
             projection[ts] = ProjectionOffset(x=0.0, y=0.0, z=0.0, yaw=0.0)
             return transformed_msg
 
-        try:
-            projection_to_fixed = buffer.lookup_transform(fixed_frame, projection_frame, stamp_time)
-        except TransformException:
-            return None
-
+        assert projection_to_fixed is not None
         ts, proj_offset = _extract_proj_offset(projection_to_fixed)
         projection[int(ts)] = proj_offset
         return transformed_msg
@@ -368,8 +371,7 @@ def iter_bag_messages(
             continue
 
         msg_frame_id = msg.header.frame_id
-        
-        if getattr(msg_cls_dict.get(topic_name), "__name__") == "ObjectList": 
+        if getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))) == "ObjectList":
             check_object_consistency(msg)
         
         stamp = msg.header.stamp if hasattr(msg, "header") else None
