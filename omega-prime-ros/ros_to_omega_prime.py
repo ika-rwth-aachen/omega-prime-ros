@@ -27,6 +27,7 @@ from rclpy.time import Time
 from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
 from rosidl_runtime_py.utilities import get_message
 from tf2_ros import Buffer, TransformException
+from tf2_perception_msgs import do_transform_ego_data, do_transform_object_list
 
 import omega_prime
 from omega_prime.map import ProjectionOffset
@@ -112,7 +113,7 @@ def _object_to_row(obj) -> dict[str, Any]:
     else:
         raise ValueError(f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData.")
 
-    pos = pmu.get_position(obj)
+    pos = pmu.get_center_position(obj)
 
     try:
         vel = pmu.get_velocity(obj)
@@ -200,6 +201,23 @@ def _extract_proj_offset(msg) -> tuple[int, ProjectionOffset]:
     return ts, offset
 
 
+def check_object_consistency(msg) -> None:
+    """Check that all objects in an ObjectList message have the same timestamp and frame_id as the header."""
+    if not hasattr(msg, "objects"):
+        return
+
+    header_stamp = msg.header.stamp if hasattr(msg, "header") else None
+    header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
+
+    for obj in msg.objects:
+        obj_stamp = obj.state.header.stamp if hasattr(obj.state, "header") else None
+        obj_frame_id = obj.state.header.frame_id if hasattr(obj.state, "header") else None
+
+        if header_stamp != obj_stamp:
+            print(f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}")
+        if header_frame_id != obj_frame_id:
+            print(f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}")
+
 def _yaw_from_quaternion(rotation) -> float:
     # Source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#:~:text=1%5D-,Quaternion%20to%20angles%20%28in%20ZYX%20sequence%29%20conversion
     x = float(rotation.x if hasattr(rotation, "x") else 0.0)
@@ -219,8 +237,10 @@ def iter_bag_messages(
     bag_dir: Path,
     object_list_topic: str | None,
     fixed_frame: str,
+    projection_frame: str,
     ego_data_topic: str | None,
     projection: dict[Any, Any],
+    unresolved_timestamps: set[int] | None = None,
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
     storage_id = _storage_id(metadata)
@@ -264,31 +284,64 @@ def iter_bag_messages(
     # TF buffer for resolving transforms
     buffer = Buffer()
 
-    # Timestamps of object list messages not yet resolved
-    pending: deque[tuple[Time, str]] = deque()
+    # Data messages pending because required TF edges are not available yet.
+    pending: deque[tuple[Any, Any, Time, str]] = deque()
 
-    def try_resolve_and_store(stamp_time: Time, msg_frame_id: str) -> bool:
-        """Try to resolve transform at stamp_time and store projection; return success."""
-        try:
-            resolved = buffer.lookup_transform(fixed_frame, msg_frame_id, stamp_time)
-        except TransformException:
-            return False
+    def _transform_msg_to_projection(msg: Any, msg_type_name: str, transform: Any) -> Any:
+        if msg_type_name == "EgoData":
+            return do_transform_ego_data(msg, transform)
+        if msg_type_name == "ObjectList":
+            return do_transform_object_list(msg, transform)
+        return msg
 
-        ts, proj_offset = _extract_proj_offset(resolved)
+    def _resolve_message_and_projection(
+        msg: Any,
+        msg_type_name: str,
+        stamp_time: Time,
+        msg_frame_id: str,
+    ) -> Any | None:
+        projection_to_fixed = None
+        if projection_frame != fixed_frame:
+            try:
+                projection_to_fixed = buffer.lookup_transform(fixed_frame, projection_frame, stamp_time)
+            except TransformException:
+                return None
+
+        # 1) Transform data to projection frame if needed.
+        if msg_frame_id == projection_frame:
+            transformed_msg = msg
+        else:
+            try:
+                to_projection = buffer.lookup_transform(projection_frame, msg_frame_id, stamp_time)
+            except TransformException:
+                return None
+            transformed_msg = _transform_msg_to_projection(msg, msg_type_name, to_projection)
+
+        # 2) Store projection metadata as projection_frame -> fixed_frame.
+        if projection_frame == fixed_frame:
+            ts = int(stamp_time.nanoseconds)
+            projection[ts] = ProjectionOffset(x=0.0, y=0.0, z=0.0, yaw=0.0)
+            return transformed_msg
+
+        assert projection_to_fixed is not None
+        ts, proj_offset = _extract_proj_offset(projection_to_fixed)
         projection[int(ts)] = proj_offset
-        return True
+        return transformed_msg
 
-    def retry_pending() -> None:
-        """Retry pending stamps after TF updates. Removes those that succeed."""
+    def retry_pending() -> Iterator[tuple[Any, Any]]:
+        """Retry pending messages after TF updates and yield those that resolve."""
         if not pending:
             return
 
-        # Try in FIFO order; keep unresolved ones.
-        new_pending: deque[tuple[Time, str]] = deque()
+        new_pending: deque[tuple[Any, Any, Time, str]] = deque()
         while pending:
-            st, frame_id = pending.popleft()
-            if not try_resolve_and_store(st, frame_id):
-                new_pending.append((st, frame_id))
+            msg, msg_type, st, frame_id = pending.popleft()
+            msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+            resolved_msg = _resolve_message_and_projection(msg, msg_type_name, st, frame_id)
+            if resolved_msg is None:
+                new_pending.append((msg, msg_type, st, frame_id))
+                continue
+            yield (resolved_msg, msg_type)
         pending.extend(new_pending)
 
     while reader.has_next():
@@ -308,26 +361,38 @@ def iter_bag_messages(
         if topic_name == "/tf_static":
             for transform in msg.transforms:
                 buffer.set_transform_static(transform, "bag")
-            retry_pending()
+            yield from retry_pending()
             continue
 
         if topic_name == "/tf":
             for transform in msg.transforms:
                 buffer.set_transform(transform, "bag")
-            retry_pending()
+            yield from retry_pending()
             continue
 
         msg_frame_id = msg.header.frame_id
+        if getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))) == "ObjectList":
+            check_object_consistency(msg)
+        
         stamp = msg.header.stamp if hasattr(msg, "header") else None
         if stamp is not None:
             stamp_time = Time.from_msg(stamp)
-            if not try_resolve_and_store(stamp_time, msg_frame_id):
-                pending.append((stamp_time, msg_frame_id))
+            msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
+            resolved_msg = _resolve_message_and_projection(msg, msg_type_name, stamp_time, msg_frame_id)
+            if resolved_msg is None:
+                pending.append((msg, msg_cls_dict[topic_name], stamp_time, msg_frame_id))
+                continue
+            msg = resolved_msg
 
         yield (msg, msg_cls_dict[topic_name])
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
-    retry_pending()
+    yield from retry_pending()
+    unresolved_ts = {int(st.nanoseconds) for _, _, st, _ in pending}
+    if unresolved_timestamps is not None:
+        unresolved_timestamps.clear()
+        unresolved_timestamps.update(unresolved_ts)
+
     if pending:
         print(f"Warning: {len(pending)} messages could not be resolved to a projection frame at the end of processing.")
 
@@ -352,11 +417,13 @@ def convert_bag_to_omega_prime(
     ego_data_topic: str | None,
     object_list_topic: str | None,
     fixed_frame: str,
+    projection_frame: str,
     map_path: Path | None = None,
     validate: bool = False,
     warn_gap_seconds: float = 3.0,
 ) -> Path:
     projections: dict[Any, Any] = {}
+    unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
 
@@ -366,8 +433,10 @@ def convert_bag_to_omega_prime(
             bag_dir,
             object_list_topic,
             fixed_frame,
+            projection_frame,
             ego_data_topic,
             projection=projections,
+            unresolved_timestamps=unresolved_projection_timestamps,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
 
@@ -385,6 +454,13 @@ def convert_bag_to_omega_prime(
                     yield row
 
     df = pl.DataFrame(row_iter())
+    if unresolved_projection_timestamps:
+        unresolved_ts = sorted(unresolved_projection_timestamps)
+        unresolved_expr = pl.col("total_nanos").is_in(unresolved_ts)
+        removed_rows = int(df.select(unresolved_expr.cast(pl.Int64).sum()).item() or 0)
+        df = df.filter(~unresolved_expr)
+        if removed_rows > 0:
+            print(f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry.")
 
     if fixed_frame == "map":
         if map_path and map_path.exists():
@@ -433,6 +509,7 @@ def _parse_args() -> argparse.Namespace:
     env_ego_data_topic = os.environ.get("EGO_DATA_TOPIC", None)
     env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
     env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
+    env_projection_frame = os.environ.get("PROJECTION_FRAME", "map")
     env_map = os.environ.get("MAP", "/map/map.xodr")
     env_bag = [p.strip() for p in os.environ.get("BAG", "").split(",") if p.strip()]
     env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
@@ -467,6 +544,11 @@ def _parse_args() -> argparse.Namespace:
         "--fixed_frame",
         default=env_fixed_frame,
         help="Target fixed frame used for TF lookup and projection metadata (default: FIXED_FRAME or utm_32N)",
+    )
+    parser.add_argument(
+        "--projection_frame",
+        default=env_projection_frame,
+        help="Data gets transformed into this frame (default: PROJECTION_FRAME or None)",
     )
     parser.add_argument(
         "--map",
@@ -535,6 +617,7 @@ def main() -> None:
             ego_data_topic=args.ego_data_topic,
             object_list_topic=args.object_list_topic,
             fixed_frame=args.fixed_frame,
+            projection_frame=args.projection_frame,
             map_path=map_path,
             validate=args.validate,
             warn_gap_seconds=args.warn_gap_seconds,

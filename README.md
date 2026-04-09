@@ -57,6 +57,7 @@ Environment variables and CLI flags:
 - `EGO_DATA_TOPIC` / `--ego_data_topic`
 - `OBJECT_LIST_TOPIC` / `--object_list_topic`
 - `FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
+- `PROJECTION_FRAME` / `--projection_frame` (default `map`)
 - `MAP` / `--map` (default `/map/map.xodr`)
 - `BAG` / `--bag` to process explicit bags (supports comma-separated paths)
 - `VALIDATE` / `--validate` enable omega-prime schema validation
@@ -68,10 +69,11 @@ Environment variables and CLI flags:
 
 
 ## Projection Information
-- The converter reads `/tf` and `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `fixed_frame`.
+- The converter reads `/tf` and `/tf_static` and resolves each EgoData and ObjectList message frame against the configured `projection_frame`.
+- All topics are transformed into the `projection_frame` if they are not already has this frame as frame_id
 - The `fixed_frame` should be the georeferenced top-level ROS coordinate frame (TF root), for example a global UTM/world frame.
 - When `fixed_frame=map`, the map must be parsed and the map projection string is used.
-- These transforms are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
+- These transforms from `projection_frame` to `fixed_frame` are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
 - The fixed frame is converted to an EPSG projection string and written as `projections["proj_string"]`.
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
 
