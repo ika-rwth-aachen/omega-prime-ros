@@ -10,6 +10,7 @@ folders (identified via metadata.yaml).
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left, bisect_right
 import math
 import os
 from collections import deque
@@ -548,6 +549,69 @@ def _collect_message_samples(
             unresolved_timestamps=unresolved_timestamps,
         )
     )
+
+
+def _build_timestamp_snap_overrides(samples: list[MessageSample], sync_config: SyncConfig) -> list[int | None]:
+    """Compute output timestamp overrides for non-base samples.
+
+    The returned list is aligned with ``samples``. Each element is either the
+    snapped base timestamp for that sample or ``None`` when the sample should
+    keep its original timestamp.
+    """
+    overrides: list[int | None] = [None] * len(samples)
+    threshold_nanos = sync_config.match_threshold_nanos
+
+    base_entries = sorted(
+        (
+            (sample.timestamp_nanos, sample_idx)
+            for sample_idx, sample in enumerate(samples)
+            if sample.msg_type_name == sync_config.base_time_topic
+        ),
+        key=lambda item: (item[0], item[1]),
+    )
+    if not base_entries:
+        return overrides
+
+    base_timestamps = [timestamp_nanos for timestamp_nanos, _ in base_entries]
+    candidate_matches: list[tuple[int, int, int, int, int]] = []
+
+    for sample_idx, sample in enumerate(samples):
+        if sample.msg_type_name == sync_config.base_time_topic:
+            continue
+        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_TOPICS:
+            continue
+
+        lower_bound = sample.timestamp_nanos - threshold_nanos
+        upper_bound = sample.timestamp_nanos + threshold_nanos
+        left = bisect_left(base_timestamps, lower_bound)
+        right = bisect_right(base_timestamps, upper_bound)
+
+        for base_pos in range(left, right):
+            base_timestamp_nanos, base_sample_idx = base_entries[base_pos]
+            distance_nanos = abs(base_timestamp_nanos - sample.timestamp_nanos)
+            candidate_matches.append(
+                (
+                    distance_nanos,
+                    base_timestamp_nanos,
+                    sample.timestamp_nanos,
+                    base_sample_idx,
+                    sample_idx,
+                )
+            )
+
+    assigned_base_sample_indices: set[int] = set()
+    assigned_sample_indices: set[int] = set()
+    for _, base_timestamp_nanos, _, base_sample_idx, sample_idx in sorted(candidate_matches):
+        if base_sample_idx in assigned_base_sample_indices:
+            continue
+        if sample_idx in assigned_sample_indices:
+            continue
+
+        overrides[sample_idx] = base_timestamp_nanos
+        assigned_base_sample_indices.add(base_sample_idx)
+        assigned_sample_indices.add(sample_idx)
+
+    return overrides
 
 
 def convert_bag_to_omega_prime(
