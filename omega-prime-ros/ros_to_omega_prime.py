@@ -457,10 +457,13 @@ def convert_bag_to_omega_prime(
     if unresolved_projection_timestamps:
         unresolved_ts = sorted(unresolved_projection_timestamps)
         unresolved_expr = pl.col("total_nanos").is_in(unresolved_ts)
-        removed_rows = int(df.select(unresolved_expr.cast(pl.Int64).sum()).item() or 0)
+        unresolved_rows = df.filter(unresolved_expr).sort(["total_nanos", "idx"])
+        removed_rows = unresolved_rows.height
         df = df.filter(~unresolved_expr)
         if removed_rows > 0:
             print(f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry.")
+            for row in unresolved_rows.iter_rows(named=True):
+                print(f"  Removed unresolved row: {row}")
 
     if fixed_frame == "map":
         if map_path and map_path.exists():
