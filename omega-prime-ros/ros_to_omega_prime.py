@@ -48,8 +48,7 @@ _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
 BaseTimeTopic = Literal["ObjectList", "EgoData"]
 _SUPPORTED_BASE_TIME_TOPICS = ("ObjectList", "EgoData")
-_DEFAULT_BASE_TIME_TOPIC: BaseTimeTopic = "ObjectList"
-_DEFAULT_MATCH_THRESHOLD_NANOS = 0
+
 
 
 @dataclass(slots=True)
@@ -529,13 +528,26 @@ def _warn_if_reappearing_id(
     last_seen_by_idx[idx] = total_nanos
 
 
-def _resolve_sync_config(sync_config: SyncConfig | None) -> SyncConfig:
-    if sync_config is None:
-        return SyncConfig(
-            base_time_topic=_DEFAULT_BASE_TIME_TOPIC,
-            match_threshold_nanos=_DEFAULT_MATCH_THRESHOLD_NANOS,
+def _collect_message_samples(
+    bag_dir: Path,
+    object_list_topic: str | None,
+    fixed_frame: str,
+    projection_frame: str,
+    ego_data_topic: str | None,
+    projection: dict[Any, Any],
+    unresolved_timestamps: set[int] | None = None,
+) -> list[MessageSample]:
+    return list(
+        iter_bag_messages(
+            bag_dir,
+            object_list_topic,
+            fixed_frame,
+            projection_frame,
+            ego_data_topic,
+            projection=projection,
+            unresolved_timestamps=unresolved_timestamps,
         )
-    return sync_config
+    )
 
 
 def convert_bag_to_omega_prime(
@@ -545,28 +557,28 @@ def convert_bag_to_omega_prime(
     object_list_topic: str | None,
     fixed_frame: str,
     projection_frame: str,
-    sync_config: SyncConfig | None = None,
+    sync_config: SyncConfig,
     map_path: Path | None = None,
     validate: bool = False,
     warn_gap_seconds: float = 3.0,
 ) -> Path:
-    sync_config = _resolve_sync_config(sync_config)
     projections: dict[Any, Any] = {}
     unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
+    samples = _collect_message_samples(
+        bag_dir,
+        object_list_topic,
+        fixed_frame,
+        projection_frame,
+        ego_data_topic,
+        projection=projections,
+        unresolved_timestamps=unresolved_projection_timestamps,
+    )
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for sample in iter_bag_messages(
-            bag_dir,
-            object_list_topic,
-            fixed_frame,
-            projection_frame,
-            ego_data_topic,
-            projection=projections,
-            unresolved_timestamps=unresolved_projection_timestamps,
-        ):
+        for sample in samples:
             msg = sample.msg
             msg_type_name = sample.msg_type_name
 
@@ -643,6 +655,17 @@ def _parse_args() -> argparse.Namespace:
     env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
     env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
     env_projection_frame = os.environ.get("PROJECTION_FRAME", "map")
+    env_base_time_topic = os.environ.get("BASE_TIME_TOPIC", "ObjectList")
+    if env_base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
+        supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
+        raise ValueError(f"BASE_TIME_TOPIC must be one of {supported}, got {env_base_time_topic!r}")
+    env_match_threshold_nanos_raw = os.environ.get("MATCH_THRESHOLD_NANOS", "100")
+    try:
+        env_match_threshold_nanos = int(env_match_threshold_nanos_raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"MATCH_THRESHOLD_NANOS must be an integer number of nanoseconds, got {env_match_threshold_nanos_raw!r}"
+        ) from exc
     env_map = os.environ.get("MAP", "/map/map.xodr")
     env_bag = [p.strip() for p in os.environ.get("BAG", "").split(",") if p.strip()]
     env_validate = os.environ.get("VALIDATE", "").lower() in {"1", "true", "yes"}
@@ -682,6 +705,21 @@ def _parse_args() -> argparse.Namespace:
         "--projection_frame",
         default=env_projection_frame,
         help="Data gets transformed into this frame (default: PROJECTION_FRAME or None)",
+    )
+    parser.add_argument(
+        "--base_time_topic",
+        choices=_SUPPORTED_BASE_TIME_TOPICS,
+        default=env_base_time_topic,
+        help="Topic whose timestamps act as the snapping reference (default: BASE_TIME_TOPIC or ObjectList)",
+    )
+    parser.add_argument(
+        "--match_threshold_nanos",
+        type=int,
+        default=env_match_threshold_nanos,
+        help=(
+            "Maximum absolute time difference in nanoseconds for timestamp snapping "
+            "(default: MATCH_THRESHOLD_NANOS or 100)"
+        ),
     )
     parser.add_argument(
         "--map",
@@ -739,6 +777,11 @@ def main() -> None:
     if args.fixed_frame == "map" and map_path and not map_path.exists():
         raise ValueError("When --fixed_frame is 'map', --map must be specified")
 
+    sync_config = SyncConfig(
+        base_time_topic=args.base_time_topic,
+        match_threshold_nanos=args.match_threshold_nanos,
+    )
+
     for bag in bags:
         if map_path and map_path.exists():
             print(f"[ros_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}")
@@ -751,6 +794,7 @@ def main() -> None:
             object_list_topic=args.object_list_topic,
             fixed_frame=args.fixed_frame,
             projection_frame=args.projection_frame,
+            sync_config=sync_config,
             map_path=map_path,
             validate=args.validate,
             warn_gap_seconds=args.warn_gap_seconds,
