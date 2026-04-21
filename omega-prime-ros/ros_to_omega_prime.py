@@ -16,7 +16,7 @@ from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import betterosi
 import numpy as np
@@ -46,6 +46,10 @@ if not hasattr(np, "maximum_sctype"):
 _VCT = betterosi.MovingObjectVehicleClassificationType
 _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
+BaseTimeTopic = Literal["ObjectList", "EgoData"]
+_SUPPORTED_BASE_TIME_TOPICS = ("ObjectList", "EgoData")
+_DEFAULT_BASE_TIME_TOPIC: BaseTimeTopic = "ObjectList"
+_DEFAULT_MATCH_THRESHOLD_NANOS = 0
 
 
 @dataclass(slots=True)
@@ -55,6 +59,28 @@ class MessageSample:
     timestamp_nanos: int
     frame_id: str
     msg: Any
+
+
+@dataclass(slots=True, frozen=True)
+class SyncConfig:
+    base_time_topic: BaseTimeTopic
+    match_threshold_nanos: int
+
+    def __post_init__(self) -> None:
+        if self.base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
+            supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
+            raise ValueError(f"base_time_topic must be one of {supported}, got {self.base_time_topic!r}")
+
+        if isinstance(self.match_threshold_nanos, bool):
+            raise ValueError("match_threshold_nanos must be a non-negative integer number of nanoseconds")
+
+        threshold_nanos = int(self.match_threshold_nanos)
+        if threshold_nanos != self.match_threshold_nanos:
+            raise ValueError("match_threshold_nanos must be an integer number of nanoseconds")
+        if threshold_nanos < 0:
+            raise ValueError("match_threshold_nanos must be non-negative")
+
+        object.__setattr__(self, "match_threshold_nanos", threshold_nanos)
 
 
 def utm_to_epsg(zone: int, northern: bool = True) -> str:
@@ -503,6 +529,15 @@ def _warn_if_reappearing_id(
     last_seen_by_idx[idx] = total_nanos
 
 
+def _resolve_sync_config(sync_config: SyncConfig | None) -> SyncConfig:
+    if sync_config is None:
+        return SyncConfig(
+            base_time_topic=_DEFAULT_BASE_TIME_TOPIC,
+            match_threshold_nanos=_DEFAULT_MATCH_THRESHOLD_NANOS,
+        )
+    return sync_config
+
+
 def convert_bag_to_omega_prime(
     bag_dir: Path,
     output_dir: Path,
@@ -510,10 +545,12 @@ def convert_bag_to_omega_prime(
     object_list_topic: str | None,
     fixed_frame: str,
     projection_frame: str,
+    sync_config: SyncConfig | None = None,
     map_path: Path | None = None,
     validate: bool = False,
     warn_gap_seconds: float = 3.0,
 ) -> Path:
+    sync_config = _resolve_sync_config(sync_config)
     projections: dict[Any, Any] = {}
     unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
