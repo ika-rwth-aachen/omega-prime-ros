@@ -14,6 +14,7 @@ import math
 import os
 from collections import deque
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,15 @@ if not hasattr(np, "maximum_sctype"):
 _VCT = betterosi.MovingObjectVehicleClassificationType
 _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
+
+
+@dataclass(slots=True)
+class MessageSample:
+    topic_name: str
+    msg_type_name: str
+    timestamp_nanos: int
+    frame_id: str
+    msg: Any
 
 
 def utm_to_epsg(zone: int, northern: bool = True) -> str:
@@ -94,18 +104,51 @@ def _class_to_osi(obj) -> tuple[int, int, int]:
     return mot, role, subtype
 
 
-def _object_to_row(obj) -> dict[str, Any]:
-    total_nanos = Time.from_msg(obj.state.header.stamp).nanoseconds
+def _stamp_to_nanos(stamp: Any) -> int:
+    return int(Time.from_msg(stamp).nanoseconds)
 
-    obj_type_name = getattr(type(obj), "__name__", str(type(obj)))
+
+def _message_type_name(msg: Any) -> str:
+    return getattr(type(msg), "__name__", str(type(msg)))
+
+
+def _header_timestamp_nanos(msg: Any) -> int:
+    header = getattr(msg, "header", None)
+    if header is None or not hasattr(header, "stamp"):
+        raise ValueError(f"Message {_message_type_name(msg)} has no header.stamp")
+    return _stamp_to_nanos(header.stamp)
+
+
+def _object_list_header_timestamp_nanos(msg: Any) -> int:
+    msg_type_name = _message_type_name(msg)
+    if msg_type_name != "ObjectList":
+        raise ValueError(f"Expected ObjectList message, got {msg_type_name}")
+    return _header_timestamp_nanos(msg)
+
+
+def _canonical_message_timestamp_nanos(msg: Any) -> int:
+    msg_type_name = _message_type_name(msg)
+    if msg_type_name == "EgoData":
+        return _header_timestamp_nanos(msg)
+    if msg_type_name == "ObjectList":
+        return _object_list_header_timestamp_nanos(msg)
+    raise ValueError(
+        f"Unexpected message type: {msg_type_name}. Supported types are EgoData and ObjectList."
+    )
+
+
+def _object_to_row(obj) -> dict[str, Any]:
+    obj_type_name = _message_type_name(obj)
 
     if obj_type_name == "Object":
+        total_nanos = _stamp_to_nanos(obj.state.header.stamp)
         idx = int(obj.id)
         width = float(pmu.get_width(obj))
         length = float(pmu.get_length(obj))
         height = float(pmu.get_height(obj))
 
     elif obj_type_name == "EgoData":
+        total_nanos = _canonical_message_timestamp_nanos(obj)
         idx = int(obj.vehicle_id)
         width = float(obj.width)
         length = float(obj.length)
@@ -190,7 +233,7 @@ def _extract_proj_offset(msg) -> tuple[int, ProjectionOffset]:
     transformation = msg.transforms[0] if hasattr(msg, "transforms") else msg
     translation = transformation.transform.translation
     rotation = transformation.transform.rotation
-    ts = int(Time.from_msg(transformation.header.stamp).nanoseconds)
+    ts = _stamp_to_nanos(transformation.header.stamp)
 
     offset = ProjectionOffset(
         x=float(translation.x if hasattr(translation, "x") else 0.0),
@@ -201,22 +244,72 @@ def _extract_proj_offset(msg) -> tuple[int, ProjectionOffset]:
     return ts, offset
 
 
+def _copy_stamp(dst_stamp: Any, src_stamp: Any) -> None:
+    dst_stamp.sec = int(src_stamp.sec)
+    dst_stamp.nanosec = int(src_stamp.nanosec)
+
+
+def _normalize_object_list_object_timestamps(msg: Any) -> int:
+    """Remap mismatching object timestamps to the ObjectList header timestamp."""
+    if _message_type_name(msg) != "ObjectList":
+        raise ValueError(f"Expected ObjectList message, got {_message_type_name(msg)}")
+
+    header = getattr(msg, "header", None)
+    if header is None or not hasattr(header, "stamp"):
+        raise ValueError("ObjectList message has no header.stamp")
+
+    header_stamp = _object_list_header_timestamp_nanos(msg)
+    normalized_count = 0
+
+    for obj in msg.objects:
+        state_header = getattr(getattr(obj, "state", None), "header", None)
+        if state_header is None or not hasattr(state_header, "stamp"):
+            continue
+
+        obj_stamp = _stamp_to_nanos(state_header.stamp)
+        if obj_stamp == header_stamp:
+            continue
+
+        print(
+            f"Info: Normalizing Object ID {obj.id} timestamp from {obj_stamp} to ObjectList header timestamp {header_stamp}."
+        )
+        _copy_stamp(state_header.stamp, header.stamp)
+        normalized_count += 1
+
+    return normalized_count
+
+
 def check_object_consistency(msg) -> None:
     """Check that all objects in an ObjectList message have the same timestamp and frame_id as the header."""
     if not hasattr(msg, "objects"):
         return
 
-    header_stamp = msg.header.stamp if hasattr(msg, "header") else None
+    header_stamp = _object_list_header_timestamp_nanos(msg) if hasattr(msg, "header") else None
     header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
 
     for obj in msg.objects:
-        obj_stamp = obj.state.header.stamp if hasattr(obj.state, "header") else None
+        obj_stamp = _stamp_to_nanos(obj.state.header.stamp) if hasattr(obj.state, "header") else None
         obj_frame_id = obj.state.header.frame_id if hasattr(obj.state, "header") else None
 
         if header_stamp != obj_stamp:
             print(f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}")
         if header_frame_id != obj_frame_id:
             print(f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}")
+
+
+def _message_to_sample(msg: Any, topic_name: str) -> MessageSample:
+    header = getattr(msg, "header", None)
+    if header is None or not hasattr(header, "stamp") or not hasattr(header, "frame_id"):
+        raise ValueError(f"Message {_message_type_name(msg)} cannot be converted into a MessageSample")
+
+    return MessageSample(
+        topic_name=topic_name,
+        msg_type_name=_message_type_name(msg),
+        timestamp_nanos=_canonical_message_timestamp_nanos(msg),
+        frame_id=str(header.frame_id),
+        msg=msg,
+    )
+
 
 def _yaw_from_quaternion(rotation) -> float:
     # Source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#:~:text=1%5D-,Quaternion%20to%20angles%20%28in%20ZYX%20sequence%29%20conversion
@@ -241,7 +334,7 @@ def iter_bag_messages(
     ego_data_topic: str | None,
     projection: dict[Any, Any],
     unresolved_timestamps: set[int] | None = None,
-) -> Iterator[Any]:
+) -> Iterator[MessageSample]:
     metadata = _load_metadata(bag_dir)
     storage_id = _storage_id(metadata)
 
@@ -285,7 +378,7 @@ def iter_bag_messages(
     buffer = Buffer()
 
     # Data messages pending because required TF edges are not available yet.
-    pending: deque[tuple[Any, Any, Time, str]] = deque()
+    pending: deque[tuple[Any, str, Time, str, str]] = deque()
 
     def _transform_msg_to_projection(msg: Any, msg_type_name: str, transform: Any) -> Any:
         if msg_type_name == "EgoData":
@@ -328,20 +421,19 @@ def iter_bag_messages(
         projection[int(ts)] = proj_offset
         return transformed_msg
 
-    def retry_pending() -> Iterator[tuple[Any, Any]]:
+    def retry_pending() -> Iterator[MessageSample]:
         """Retry pending messages after TF updates and yield those that resolve."""
         if not pending:
             return
 
-        new_pending: deque[tuple[Any, Any, Time, str]] = deque()
+        new_pending: deque[tuple[Any, str, Time, str, str]] = deque()
         while pending:
-            msg, msg_type, st, frame_id = pending.popleft()
-            msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+            msg, msg_type_name, st, frame_id, topic_name = pending.popleft()
             resolved_msg = _resolve_message_and_projection(msg, msg_type_name, st, frame_id)
             if resolved_msg is None:
-                new_pending.append((msg, msg_type, st, frame_id))
+                new_pending.append((msg, msg_type_name, st, frame_id, topic_name))
                 continue
-            yield (resolved_msg, msg_type)
+            yield _message_to_sample(resolved_msg, topic_name)
         pending.extend(new_pending)
 
     while reader.has_next():
@@ -371,24 +463,24 @@ def iter_bag_messages(
             continue
 
         msg_frame_id = msg.header.frame_id
-        if getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))) == "ObjectList":
+        msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
+        if msg_type_name == "ObjectList":
+            _normalize_object_list_object_timestamps(msg)
             check_object_consistency(msg)
-        
-        stamp = msg.header.stamp if hasattr(msg, "header") else None
-        if stamp is not None:
-            stamp_time = Time.from_msg(stamp)
-            msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
+
+        if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
+            stamp_time = Time(nanoseconds=_canonical_message_timestamp_nanos(msg))
             resolved_msg = _resolve_message_and_projection(msg, msg_type_name, stamp_time, msg_frame_id)
             if resolved_msg is None:
-                pending.append((msg, msg_cls_dict[topic_name], stamp_time, msg_frame_id))
+                pending.append((msg, msg_type_name, stamp_time, msg_frame_id, topic_name))
                 continue
             msg = resolved_msg
 
-        yield (msg, msg_cls_dict[topic_name])
+        yield _message_to_sample(msg, topic_name)
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
     yield from retry_pending()
-    unresolved_ts = {int(st.nanoseconds) for _, _, st, _ in pending}
+    unresolved_ts = {int(st.nanoseconds) for _, _, st, _, _ in pending}
     if unresolved_timestamps is not None:
         unresolved_timestamps.clear()
         unresolved_timestamps.update(unresolved_ts)
@@ -429,7 +521,7 @@ def convert_bag_to_omega_prime(
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for msg, msg_type in iter_bag_messages(
+        for sample in iter_bag_messages(
             bag_dir,
             object_list_topic,
             fixed_frame,
@@ -438,7 +530,8 @@ def convert_bag_to_omega_prime(
             projection=projections,
             unresolved_timestamps=unresolved_projection_timestamps,
         ):
-            msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+            msg = sample.msg
+            msg_type_name = sample.msg_type_name
 
             if msg_type_name == "EgoData":
                 row = _object_to_row(msg)
