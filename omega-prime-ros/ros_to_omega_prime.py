@@ -954,7 +954,7 @@ def _parse_args() -> argparse.Namespace:
         raise ValueError(
             f"BASE_TIME_TOPIC must be one of {supported}, got {env_base_time_topic!r}"
         )
-    env_match_threshold_nanos_raw = os.environ.get("MATCH_THRESHOLD_NANOS", "100")
+    env_match_threshold_nanos_raw = os.environ.get("MATCH_THRESHOLD_NANOS", "0")
     try:
         env_match_threshold_nanos = int(env_match_threshold_nanos_raw)
     except ValueError as exc:
@@ -1017,7 +1017,7 @@ def _parse_args() -> argparse.Namespace:
         default=env_match_threshold_nanos,
         help=(
             "Maximum absolute time difference in nanoseconds for timestamp snapping "
-            "(default: MATCH_THRESHOLD_NANOS or 100)"
+            "(default: MATCH_THRESHOLD_NANOS or 0)"
         ),
     )
     parser.add_argument(

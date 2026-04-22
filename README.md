@@ -7,7 +7,7 @@
 # Omega-Prime-ROS
 This repository provides a Dockerized ROS 2 conversion pipeline that exports `rosbag2` data to omega-prime `.mcap` files.
 
-The conversion pipeline is based on the [perception_interfaces](https://github.com/ika-rwth-aachen/perception_interfaces). It scans `rosbag2` recordings, reads [EgoData](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/EgoData.msg) and [ObjectList](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/ObjectList.msg) topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows.
+The conversion pipeline is based on the [perception_interfaces](https://github.com/ika-rwth-aachen/perception_interfaces). It scans `rosbag2` recordings, reads [EgoData](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/EgoData.msg) and [ObjectList](https://github.com/ika-rwth-aachen/perception_interfaces/blob/main/perception_msgs/msg/ObjectList.msg) topics, and resolves `/tf` + `/tf_static` transforms into a configurable fixed frame. The converter writes one `.mcap` per bag and supports optional OpenDRIVE map embedding and schema validation for downstream analytics workflows. When both `EgoData` and `ObjectList` are available, nearby timestamps can be synchronized at export time without changing the underlying TF lookup timestamp of each message.
 
 For further processing of resulting omega-prime files, see the main [omega-prime repository](https://github.com/ika-rwth-aachen/omega-prime).
 
@@ -29,6 +29,8 @@ Use the Docker image to run the converter automatically. It will discovers `rosb
 docker run --rm -it \
     -e EGO_DATA_TOPIC=</your/ego_data_topic> \
     -e OBJECT_LIST_TOPIC=</your/object_list_topic> \
+    -e BASE_TIME_TOPIC=<"ObjectList"/or/"EgoData"> \
+    -e MATCH_THRESHOLD_NANOS=0 \
     -v <path/to/bags>:/input \
     -v </path/to/map.xodr>:/map/map.xodr \
     -v "$PWD"/output:/output \
@@ -58,10 +60,24 @@ Environment variables and CLI flags:
 - `OBJECT_LIST_TOPIC` / `--object_list_topic`
 - `FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
 - `PROJECTION_FRAME` / `--projection_frame` (default `map`)
+- `BASE_TIME_TOPIC` / `--base_time_topic` (default `ObjectList`, allowed values: `ObjectList`, `EgoData`)
+- `MATCH_THRESHOLD_NANOS` / `--match_threshold_nanos` (default `0`)
 - `MAP` / `--map` (default `/map/map.xodr`)
 - `BAG` / `--bag` to process explicit bags (supports comma-separated paths)
 - `VALIDATE` / `--validate` enable omega-prime schema validation
 - `WARN_GAP_SECONDS` / `--warn-gap-seconds` warning threshold in seconds if same object ID appears multiple times
+
+### Timestamp Synchronization
+- Timestamp synchronization is applied only after the normal per-message TF transformation step has completed.
+- Each message is still transformed using its own original message timestamp.
+- `BASE_TIME_TOPIC` selects which topic provides the reference timestamps for snapping. Supported values are `ObjectList` and `EgoData`.
+- `MATCH_THRESHOLD_NANOS` defines the maximum absolute time difference for snapping a non-base message to the nearest base-topic timestamp.
+- The base-topic message always keeps its own timestamp.
+- A non-base message is snapped only when the nearest base-topic timestamp is within the threshold.
+- If several non-base messages fall within the threshold of the same base timestamp, only the single nearest message is snapped to that base timestamp.
+- Messages outside the threshold keep their original timestamp, so no `EgoData` or `ObjectList` samples are dropped because one topic has a higher frequency.
+- If only one of `EGO_DATA_TOPIC` or `OBJECT_LIST_TOPIC` is configured, timestamp snapping is skipped and the single-topic export behavior stays unchanged.
+- For `ObjectList`, object rows are exported using `ObjectList.header.stamp` as the canonical timestamp. If an individual object carries a different internal timestamp, it is normalized to the list header timestamp during conversion.
 
 ### Notes
 - The converter scans `/input` for rosbag2 directories containing a `metadata.yaml` and writes one omega-prime `.mcap` per bag into `/output` by default.
@@ -76,6 +92,7 @@ Environment variables and CLI flags:
 - These transforms from `projection_frame` to `fixed_frame` are stored in omega-prime as per-timestamp `ProjectionOffset` metadata.
 - The fixed frame is converted to an EPSG projection string and written as `projections["proj_string"]`.
 - Supported `fixed_frame` values: `utm_<zone: int>[N/S]` and `map` (e.g. `utm_30N`).
+- Timestamp synchronization does not change projection handling. TF and projection metadata are still resolved at each message's original timestamp, and only the exported omega-prime `total_nanos` may be snapped afterward.
 
 ## Docker Image
 The provided image bundles ROS 2 Jazzy, rosbag2 Python bindings, omega-prime, and builds `perception_interfaces` from GitHub so EgoData and ObjectList topics can be exported to omega-prime MCAP.
