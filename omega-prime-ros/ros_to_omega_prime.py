@@ -62,6 +62,15 @@ class MessageSample:
 
 
 @dataclass(slots=True, frozen=True)
+class TimestampSnapCandidate:
+    distance_nanos: int
+    base_timestamp_nanos: int
+    sample_timestamp_nanos: int
+    base_sample_idx: int
+    sample_idx: int
+
+
+@dataclass(slots=True, frozen=True)
 class SyncConfig:
     base_time_topic: BaseTimeTopic
     match_threshold_nanos: int
@@ -551,6 +560,26 @@ def _collect_message_samples(
     )
 
 
+def _timestamp_snap_candidate_sort_key(candidate: TimestampSnapCandidate) -> tuple[int, int, int, int, int]:
+    """Return a deterministic sort key for timestamp snapping.
+
+    Tie-break rules:
+    1. Smaller absolute time distance wins.
+    2. If one non-base sample is equally close to two base timestamps, prefer the
+       earlier base timestamp.
+    3. If two non-base samples are equally close to the same base timestamp,
+       prefer the earlier non-base sample timestamp.
+    4. Stable final tie-breaks fall back to sample indices.
+    """
+    return (
+        candidate.distance_nanos,
+        candidate.base_timestamp_nanos,
+        candidate.sample_timestamp_nanos,
+        candidate.base_sample_idx,
+        candidate.sample_idx,
+    )
+
+
 def _build_timestamp_snap_overrides(samples: list[MessageSample], sync_config: SyncConfig) -> list[int | None]:
     """Compute output timestamp overrides for non-base samples.
 
@@ -573,7 +602,7 @@ def _build_timestamp_snap_overrides(samples: list[MessageSample], sync_config: S
         return overrides
 
     base_timestamps = [timestamp_nanos for timestamp_nanos, _ in base_entries]
-    candidate_matches: list[tuple[int, int, int, int, int]] = []
+    candidate_matches: list[TimestampSnapCandidate] = []
 
     for sample_idx, sample in enumerate(samples):
         if sample.msg_type_name == sync_config.base_time_topic:
@@ -590,26 +619,26 @@ def _build_timestamp_snap_overrides(samples: list[MessageSample], sync_config: S
             base_timestamp_nanos, base_sample_idx = base_entries[base_pos]
             distance_nanos = abs(base_timestamp_nanos - sample.timestamp_nanos)
             candidate_matches.append(
-                (
-                    distance_nanos,
-                    base_timestamp_nanos,
-                    sample.timestamp_nanos,
-                    base_sample_idx,
-                    sample_idx,
+                TimestampSnapCandidate(
+                    distance_nanos=distance_nanos,
+                    base_timestamp_nanos=base_timestamp_nanos,
+                    sample_timestamp_nanos=sample.timestamp_nanos,
+                    base_sample_idx=base_sample_idx,
+                    sample_idx=sample_idx,
                 )
             )
 
     assigned_base_sample_indices: set[int] = set()
     assigned_sample_indices: set[int] = set()
-    for _, base_timestamp_nanos, _, base_sample_idx, sample_idx in sorted(candidate_matches):
-        if base_sample_idx in assigned_base_sample_indices:
+    for candidate in sorted(candidate_matches, key=_timestamp_snap_candidate_sort_key):
+        if candidate.base_sample_idx in assigned_base_sample_indices:
             continue
-        if sample_idx in assigned_sample_indices:
+        if candidate.sample_idx in assigned_sample_indices:
             continue
 
-        overrides[sample_idx] = base_timestamp_nanos
-        assigned_base_sample_indices.add(base_sample_idx)
-        assigned_sample_indices.add(sample_idx)
+        overrides[candidate.sample_idx] = candidate.base_timestamp_nanos
+        assigned_base_sample_indices.add(candidate.base_sample_idx)
+        assigned_sample_indices.add(candidate.sample_idx)
 
     return overrides
 
