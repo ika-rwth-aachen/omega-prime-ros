@@ -172,7 +172,7 @@ def _canonical_message_timestamp_nanos(msg: Any) -> int:
     )
 
 
-def _object_to_row(obj) -> dict[str, Any]:
+def _object_to_row(obj, output_timestamp_nanos: int | None = None) -> dict[str, Any]:
     obj_type_name = _message_type_name(obj)
 
     if obj_type_name == "Object":
@@ -190,6 +190,13 @@ def _object_to_row(obj) -> dict[str, Any]:
         height = float(obj.height)
     else:
         raise ValueError(f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData.")
+
+    if output_timestamp_nanos is not None:
+        if isinstance(output_timestamp_nanos, bool):
+            raise ValueError("output_timestamp_nanos must be an integer number of nanoseconds")
+        total_nanos = int(output_timestamp_nanos)
+        if total_nanos != output_timestamp_nanos:
+            raise ValueError("output_timestamp_nanos must be an integer number of nanoseconds")
 
     pos = pmu.get_center_position(obj)
 
