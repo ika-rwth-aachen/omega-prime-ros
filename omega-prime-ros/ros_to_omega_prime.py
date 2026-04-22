@@ -675,15 +675,17 @@ def convert_bag_to_omega_prime(
         projection=projections,
         unresolved_timestamps=unresolved_projection_timestamps,
     )
+    sample_timestamp_overrides = _build_timestamp_snap_overrides(samples, sync_config)
+
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for sample in samples:
+        for sample, output_timestamp_nanos in zip(samples, sample_timestamp_overrides, strict=True):
             msg = sample.msg
             msg_type_name = sample.msg_type_name
 
             if msg_type_name == "EgoData":
-                row = _object_to_row(msg)
+                row = _object_to_row(msg, output_timestamp_nanos=output_timestamp_nanos)
                 if host_vehicle_id is None:
                     host_vehicle_id = int(row["idx"])
                 yield row
@@ -691,7 +693,7 @@ def convert_bag_to_omega_prime(
 
             if msg_type_name == "ObjectList":
                 for obj in msg.objects:
-                    row = _object_to_row(obj)
+                    row = _object_to_row(msg, output_timestamp_nanos=output_timestamp_nanos)
                     _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
                     yield row
 
