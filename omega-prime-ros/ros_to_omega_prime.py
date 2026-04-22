@@ -51,7 +51,6 @@ BaseTimeTopic = Literal["ObjectList", "EgoData"]
 _SUPPORTED_BASE_TIME_TOPICS = ("ObjectList", "EgoData")
 
 
-
 @dataclass(slots=True)
 class MessageSample:
     topic_name: str
@@ -78,14 +77,20 @@ class SyncConfig:
     def __post_init__(self) -> None:
         if self.base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
             supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
-            raise ValueError(f"base_time_topic must be one of {supported}, got {self.base_time_topic!r}")
+            raise ValueError(
+                f"base_time_topic must be one of {supported}, got {self.base_time_topic!r}"
+            )
 
         if isinstance(self.match_threshold_nanos, bool):
-            raise ValueError("match_threshold_nanos must be a non-negative integer number of nanoseconds")
+            raise ValueError(
+                "match_threshold_nanos must be a non-negative integer number of nanoseconds"
+            )
 
         threshold_nanos = int(self.match_threshold_nanos)
         if threshold_nanos != self.match_threshold_nanos:
-            raise ValueError("match_threshold_nanos must be an integer number of nanoseconds")
+            raise ValueError(
+                "match_threshold_nanos must be an integer number of nanoseconds"
+            )
         if threshold_nanos < 0:
             raise ValueError("match_threshold_nanos must be non-negative")
 
@@ -189,14 +194,20 @@ def _object_to_row(obj, output_timestamp_nanos: int | None = None) -> dict[str, 
         length = float(obj.length)
         height = float(obj.height)
     else:
-        raise ValueError(f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData.")
+        raise ValueError(
+            f"Unexpected object type: {obj_type_name}. Supported types are Object and EgoData."
+        )
 
     if output_timestamp_nanos is not None:
         if isinstance(output_timestamp_nanos, bool):
-            raise ValueError("output_timestamp_nanos must be an integer number of nanoseconds")
+            raise ValueError(
+                "output_timestamp_nanos must be an integer number of nanoseconds"
+            )
         total_nanos = int(output_timestamp_nanos)
         if total_nanos != output_timestamp_nanos:
-            raise ValueError("output_timestamp_nanos must be an integer number of nanoseconds")
+            raise ValueError(
+                "output_timestamp_nanos must be an integer number of nanoseconds"
+            )
 
     pos = pmu.get_center_position(obj)
 
@@ -326,23 +337,41 @@ def check_object_consistency(msg) -> None:
     if not hasattr(msg, "objects"):
         return
 
-    header_stamp = _object_list_header_timestamp_nanos(msg) if hasattr(msg, "header") else None
+    header_stamp = (
+        _object_list_header_timestamp_nanos(msg) if hasattr(msg, "header") else None
+    )
     header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
 
     for obj in msg.objects:
-        obj_stamp = _stamp_to_nanos(obj.state.header.stamp) if hasattr(obj.state, "header") else None
-        obj_frame_id = obj.state.header.frame_id if hasattr(obj.state, "header") else None
+        obj_stamp = (
+            _stamp_to_nanos(obj.state.header.stamp)
+            if hasattr(obj.state, "header")
+            else None
+        )
+        obj_frame_id = (
+            obj.state.header.frame_id if hasattr(obj.state, "header") else None
+        )
 
         if header_stamp != obj_stamp:
-            print(f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}")
+            print(
+                f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}"
+            )
         if header_frame_id != obj_frame_id:
-            print(f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}")
+            print(
+                f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}"
+            )
 
 
 def _message_to_sample(msg: Any, topic_name: str) -> MessageSample:
     header = getattr(msg, "header", None)
-    if header is None or not hasattr(header, "stamp") or not hasattr(header, "frame_id"):
-        raise ValueError(f"Message {_message_type_name(msg)} cannot be converted into a MessageSample")
+    if (
+        header is None
+        or not hasattr(header, "stamp")
+        or not hasattr(header, "frame_id")
+    ):
+        raise ValueError(
+            f"Message {_message_type_name(msg)} cannot be converted into a MessageSample"
+        )
 
     return MessageSample(
         topic_name=topic_name,
@@ -392,11 +421,15 @@ def iter_bag_messages(
     def _get_msg_class(topic_name: str) -> Any:
         if topic_name not in type_map:
             available = ", ".join(sorted(type_map))
-            raise RuntimeError(f"Topic {topic_name} not found. Available topics: {available}")
+            raise RuntimeError(
+                f"Topic {topic_name} not found. Available topics: {available}"
+            )
         try:
             return get_message(type_map[topic_name])
         except Exception:
-            print(f"Warning: Could not get message class for topic {topic_name}. Skipping.")
+            print(
+                f"Warning: Could not get message class for topic {topic_name}. Skipping."
+            )
             return None
 
     if ego_data_topic:
@@ -414,7 +447,9 @@ def iter_bag_messages(
             raise ValueError(f"{object_list_topic} is not of type ObjectList")
 
     msg_cls_dict["/tf"] = get_message(type_map["/tf"]) if "/tf" in type_map else None
-    msg_cls_dict["/tf_static"] = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
+    msg_cls_dict["/tf_static"] = (
+        get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
+    )
 
     # TF buffer for resolving transforms
     buffer = Buffer()
@@ -422,7 +457,9 @@ def iter_bag_messages(
     # Data messages pending because required TF edges are not available yet.
     pending: deque[tuple[Any, str, Time, str, str]] = deque()
 
-    def _transform_msg_to_projection(msg: Any, msg_type_name: str, transform: Any) -> Any:
+    def _transform_msg_to_projection(
+        msg: Any, msg_type_name: str, transform: Any
+    ) -> Any:
         if msg_type_name == "EgoData":
             return do_transform_ego_data(msg, transform)
         if msg_type_name == "ObjectList":
@@ -438,7 +475,9 @@ def iter_bag_messages(
         projection_to_fixed = None
         if projection_frame != fixed_frame:
             try:
-                projection_to_fixed = buffer.lookup_transform(fixed_frame, projection_frame, stamp_time)
+                projection_to_fixed = buffer.lookup_transform(
+                    fixed_frame, projection_frame, stamp_time
+                )
             except TransformException:
                 return None
 
@@ -447,10 +486,14 @@ def iter_bag_messages(
             transformed_msg = msg
         else:
             try:
-                to_projection = buffer.lookup_transform(projection_frame, msg_frame_id, stamp_time)
+                to_projection = buffer.lookup_transform(
+                    projection_frame, msg_frame_id, stamp_time
+                )
             except TransformException:
                 return None
-            transformed_msg = _transform_msg_to_projection(msg, msg_type_name, to_projection)
+            transformed_msg = _transform_msg_to_projection(
+                msg, msg_type_name, to_projection
+            )
 
         # 2) Store projection metadata as projection_frame -> fixed_frame.
         if projection_frame == fixed_frame:
@@ -471,7 +514,9 @@ def iter_bag_messages(
         new_pending: deque[tuple[Any, str, Time, str, str]] = deque()
         while pending:
             msg, msg_type_name, st, frame_id, topic_name = pending.popleft()
-            resolved_msg = _resolve_message_and_projection(msg, msg_type_name, st, frame_id)
+            resolved_msg = _resolve_message_and_projection(
+                msg, msg_type_name, st, frame_id
+            )
             if resolved_msg is None:
                 new_pending.append((msg, msg_type_name, st, frame_id, topic_name))
                 continue
@@ -505,16 +550,22 @@ def iter_bag_messages(
             continue
 
         msg_frame_id = msg.header.frame_id
-        msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
+        msg_type_name = getattr(
+            msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))
+        )
         if msg_type_name == "ObjectList":
             _normalize_object_list_object_timestamps(msg)
             check_object_consistency(msg)
 
         if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
             stamp_time = Time(nanoseconds=_canonical_message_timestamp_nanos(msg))
-            resolved_msg = _resolve_message_and_projection(msg, msg_type_name, stamp_time, msg_frame_id)
+            resolved_msg = _resolve_message_and_projection(
+                msg, msg_type_name, stamp_time, msg_frame_id
+            )
             if resolved_msg is None:
-                pending.append((msg, msg_type_name, stamp_time, msg_frame_id, topic_name))
+                pending.append(
+                    (msg, msg_type_name, stamp_time, msg_frame_id, topic_name)
+                )
                 continue
             msg = resolved_msg
 
@@ -528,7 +579,9 @@ def iter_bag_messages(
         unresolved_timestamps.update(unresolved_ts)
 
     if pending:
-        print(f"Warning: {len(pending)} messages could not be resolved to a projection frame at the end of processing.")
+        print(
+            f"Warning: {len(pending)} messages could not be resolved to a projection frame at the end of processing."
+        )
 
 
 def _warn_if_reappearing_id(
@@ -567,7 +620,9 @@ def _collect_message_samples(
     )
 
 
-def _timestamp_snap_candidate_sort_key(candidate: TimestampSnapCandidate) -> tuple[int, int, int, int, int]:
+def _timestamp_snap_candidate_sort_key(
+    candidate: TimestampSnapCandidate,
+) -> tuple[int, int, int, int, int]:
     """Return a deterministic sort key for timestamp snapping.
 
     Tie-break rules:
@@ -587,7 +642,9 @@ def _timestamp_snap_candidate_sort_key(candidate: TimestampSnapCandidate) -> tup
     )
 
 
-def _build_timestamp_snap_overrides(samples: list[MessageSample], sync_config: SyncConfig) -> list[int | None]:
+def _build_timestamp_snap_overrides(
+    samples: list[MessageSample], sync_config: SyncConfig
+) -> list[int | None]:
     """Compute output timestamp overrides for non-base samples.
 
     The returned list is aligned with ``samples``. Each element is either the
@@ -677,10 +734,11 @@ def convert_bag_to_omega_prime(
     )
     sample_timestamp_overrides = _build_timestamp_snap_overrides(samples, sync_config)
 
-
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for sample, output_timestamp_nanos in zip(samples, sample_timestamp_overrides, strict=True):
+        for sample, output_timestamp_nanos in zip(
+            samples, sample_timestamp_overrides, strict=True
+        ):
             msg = sample.msg
             msg_type_name = sample.msg_type_name
 
@@ -693,7 +751,9 @@ def convert_bag_to_omega_prime(
 
             if msg_type_name == "ObjectList":
                 for obj in msg.objects:
-                    row = _object_to_row(msg, output_timestamp_nanos=output_timestamp_nanos)
+                    row = _object_to_row(
+                        msg, output_timestamp_nanos=output_timestamp_nanos
+                    )
                     _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
                     yield row
 
@@ -705,7 +765,9 @@ def convert_bag_to_omega_prime(
         removed_rows = unresolved_rows.height
         df = df.filter(~unresolved_expr)
         if removed_rows > 0:
-            print(f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry.")
+            print(
+                f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry."
+            )
             for row in unresolved_rows.iter_rows(named=True):
                 print(f"  Removed unresolved row: {row}")
 
@@ -721,10 +783,17 @@ def convert_bag_to_omega_prime(
             raise FileNotFoundError(f"Map file does not exist: {map_path}")
     else:
         if fixed_frame.split("_")[0] != "utm":
-            raise ValueError(f"fixed_frame must be in format 'utm_<zone_number><N|S>', got '{fixed_frame}'")
+            raise ValueError(
+                f"fixed_frame must be in format 'utm_<zone_number><N|S>', got '{fixed_frame}'"
+            )
         if fixed_frame.split("_")[1][-1] not in ["N", "S"]:
-            raise ValueError(f"fixed_frame must be in format 'utm_<zone_number><N|S>', got '{fixed_frame}'")
-        proj_string = utm_to_epsg(int(fixed_frame.split("_")[1][:-1]), northern=fixed_frame.split("_")[1][-1] == "N")
+            raise ValueError(
+                f"fixed_frame must be in format 'utm_<zone_number><N|S>', got '{fixed_frame}'"
+            )
+        proj_string = utm_to_epsg(
+            int(fixed_frame.split("_")[1][:-1]),
+            northern=fixed_frame.split("_")[1][-1] == "N",
+        )
         if not proj_string:
             raise KeyError(f"No EPSG Code defined for {fixed_frame}")
     projections["proj_string"] = proj_string
@@ -760,7 +829,9 @@ def _parse_args() -> argparse.Namespace:
     env_base_time_topic = os.environ.get("BASE_TIME_TOPIC", "ObjectList")
     if env_base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
         supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
-        raise ValueError(f"BASE_TIME_TOPIC must be one of {supported}, got {env_base_time_topic!r}")
+        raise ValueError(
+            f"BASE_TIME_TOPIC must be one of {supported}, got {env_base_time_topic!r}"
+        )
     env_match_threshold_nanos_raw = os.environ.get("MATCH_THRESHOLD_NANOS", "100")
     try:
         env_match_threshold_nanos = int(env_match_threshold_nanos_raw)
@@ -775,9 +846,13 @@ def _parse_args() -> argparse.Namespace:
     try:
         env_warn_gap_seconds = float(env_warn_gap_seconds_raw)
     except ValueError as exc:
-        raise ValueError(f"WARN_GAP_SECONDS must be a float, got {env_warn_gap_seconds_raw!r}") from exc
+        raise ValueError(
+            f"WARN_GAP_SECONDS must be a float, got {env_warn_gap_seconds_raw!r}"
+        ) from exc
 
-    parser = argparse.ArgumentParser(description="Convert ROS 2 ObjectList bags to omega-prime MCAP")
+    parser = argparse.ArgumentParser(
+        description="Convert ROS 2 ObjectList bags to omega-prime MCAP"
+    )
     parser.add_argument(
         "--bag-dir",
         default=env_bag_dir,
@@ -854,7 +929,9 @@ def main() -> None:
     args = _parse_args()
 
     if not args.ego_data_topic and not args.object_list_topic:
-        raise ValueError("At least one of --ego_data_topic or --object_list_topic must be specified")
+        raise ValueError(
+            "At least one of --ego_data_topic or --object_list_topic must be specified"
+        )
 
     bag_dirs = [Path(b).resolve() for b in args.bag]
     bag_root = Path(args.bag_dir).resolve()
@@ -886,7 +963,9 @@ def main() -> None:
 
     for bag in bags:
         if map_path and map_path.exists():
-            print(f"[ros_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}")
+            print(
+                f"[ros_to_omega_prime] Processing bag: {bag} with OpenDRIVE File: {map_path}"
+            )
         else:
             print(f"[ros_to_omega_prime] Processing bag: {bag} without OpenDRIVE File")
         out_file = convert_bag_to_omega_prime(
