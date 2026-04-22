@@ -15,3 +15,8 @@ This file is used to document all notable changes to the project. Each tag/versi
 - Use get_center_pos() instead of get_position() to ensure the x,y,z are always centered aligning with the OSI definition
 - all messages are transformed to `projection_frame`
 - the transformation from `projection_frame` to `fixed_frame` is stored in Recording projection dictionary
+
+## 1.2.0
+- Add export-time timestamp synchronization for `EgoData` and `ObjectList` with configurable `base_time_topic` and `match_threshold_nanos`, while keeping TF lookup and projection handling at each message's original timestamp.
+- Preserve higher-frequency topic data by snapping only the nearest eligible non-base message to a base-topic timestamp instead of dropping unmatched samples.
+- Normalize `ObjectList` object timestamps to `ObjectList.header.stamp` and expose the synchronization settings through CLI arguments and environment variables.
