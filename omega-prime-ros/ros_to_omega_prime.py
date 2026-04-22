@@ -70,6 +70,18 @@ class TimestampSnapCandidate:
 
 
 @dataclass(slots=True, frozen=True)
+class TimestampSnapReport:
+    total_sample_count: int
+    base_sample_count: int
+    non_base_sample_count: int
+    matched_non_base_count: int
+    unmatched_non_base_count: int
+    unmatched_no_candidate_count: int
+    unmatched_competing_count: int
+    single_topic_mode: bool
+
+
+@dataclass(slots=True, frozen=True)
 class SyncConfig:
     base_time_topic: BaseTimeTopic
     match_threshold_nanos: int
@@ -653,6 +665,13 @@ def _build_timestamp_snap_overrides(
     """
     overrides: list[int | None] = [None] * len(samples)
     threshold_nanos = sync_config.match_threshold_nanos
+    present_supported_topics = {
+        sample.msg_type_name
+        for sample in samples
+        if sample.msg_type_name in _SUPPORTED_BASE_TIME_TOPICS
+    }
+    if len(present_supported_topics) < 2:
+        return overrides
 
     base_entries = sorted(
         (
@@ -693,18 +712,120 @@ def _build_timestamp_snap_overrides(
             )
 
     assigned_base_sample_indices: set[int] = set()
+    assigned_base_timestamps: set[int] = set()
     assigned_sample_indices: set[int] = set()
     for candidate in sorted(candidate_matches, key=_timestamp_snap_candidate_sort_key):
         if candidate.base_sample_idx in assigned_base_sample_indices:
+            continue
+        if candidate.base_timestamp_nanos in assigned_base_timestamps:
             continue
         if candidate.sample_idx in assigned_sample_indices:
             continue
 
         overrides[candidate.sample_idx] = candidate.base_timestamp_nanos
         assigned_base_sample_indices.add(candidate.base_sample_idx)
+        assigned_base_timestamps.add(candidate.base_timestamp_nanos)
         assigned_sample_indices.add(candidate.sample_idx)
 
     return overrides
+
+
+def _validate_and_report_timestamp_snapping(
+    samples: list[MessageSample],
+    overrides: list[int | None],
+    sync_config: SyncConfig,
+) -> TimestampSnapReport:
+    if len(samples) != len(overrides):
+        raise ValueError("Timestamp snapping overrides must align one-to-one with collected samples")
+
+    present_supported_topics = {
+        sample.msg_type_name
+        for sample in samples
+        if sample.msg_type_name in _SUPPORTED_BASE_TIME_TOPICS
+    }
+    single_topic_mode = len(present_supported_topics) < 2
+
+    base_timestamps = sorted(
+        sample.timestamp_nanos
+        for sample in samples
+        if sample.msg_type_name == sync_config.base_time_topic
+    )
+    base_timestamp_set = set(base_timestamps)
+
+    matched_non_base_count = 0
+    unmatched_no_candidate_count = 0
+    unmatched_competing_count = 0
+    seen_assigned_base_timestamps: set[int] = set()
+    base_sample_count = 0
+    non_base_sample_count = 0
+
+    for sample, override in zip(samples, overrides, strict=True):
+        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_TOPICS:
+            continue
+
+        if sample.msg_type_name == sync_config.base_time_topic:
+            base_sample_count += 1
+            if override is not None:
+                raise ValueError("Base topic samples must keep their original timestamps")
+            continue
+
+        non_base_sample_count += 1
+        if override is None:
+            lower_bound = sample.timestamp_nanos - sync_config.match_threshold_nanos
+            upper_bound = sample.timestamp_nanos + sync_config.match_threshold_nanos
+            left = bisect_left(base_timestamps, lower_bound)
+            right = bisect_right(base_timestamps, upper_bound)
+            if left == right:
+                unmatched_no_candidate_count += 1
+            else:
+                unmatched_competing_count += 1
+            continue
+
+        if override not in base_timestamp_set:
+            raise ValueError("Timestamp snap override must reference an existing base topic timestamp")
+        if abs(override - sample.timestamp_nanos) > sync_config.match_threshold_nanos:
+            raise ValueError("Timestamp snap override exceeds the configured threshold")
+        if override in seen_assigned_base_timestamps:
+            raise ValueError("At most one non-base sample may snap to a given base timestamp")
+
+        seen_assigned_base_timestamps.add(override)
+        matched_non_base_count += 1
+
+    unmatched_non_base_count = unmatched_no_candidate_count + unmatched_competing_count
+    report = TimestampSnapReport(
+        total_sample_count=len(samples),
+        base_sample_count=base_sample_count,
+        non_base_sample_count=non_base_sample_count,
+        matched_non_base_count=matched_non_base_count,
+        unmatched_non_base_count=unmatched_non_base_count,
+        unmatched_no_candidate_count=unmatched_no_candidate_count,
+        unmatched_competing_count=unmatched_competing_count,
+        single_topic_mode=single_topic_mode,
+    )
+
+    if report.single_topic_mode:
+        if report.total_sample_count > 0:
+            print(
+                "[ros_to_omega_prime] Timestamp snapping skipped because only one supported topic is present; "
+                "all messages keep their original timestamps."
+            )
+        return report
+
+    print(
+        "[ros_to_omega_prime] Timestamp snapping kept all "
+        f"{report.total_sample_count} transformed messages "
+        f"({report.base_sample_count} base-topic, {report.non_base_sample_count} non-base)."
+    )
+    print(
+        "[ros_to_omega_prime] Timestamp snapping summary: "
+        f"base_time_topic={sync_config.base_time_topic}, "
+        f"threshold={sync_config.match_threshold_nanos}ns, "
+        f"matched={report.matched_non_base_count}, "
+        f"unmatched={report.unmatched_non_base_count} "
+        f"(no_candidate={report.unmatched_no_candidate_count}, "
+        f"competing_nearer_match={report.unmatched_competing_count})."
+    )
+    return report
 
 
 def convert_bag_to_omega_prime(
@@ -733,6 +854,7 @@ def convert_bag_to_omega_prime(
         unresolved_timestamps=unresolved_projection_timestamps,
     )
     sample_timestamp_overrides = _build_timestamp_snap_overrides(samples, sync_config)
+    _validate_and_report_timestamp_snapping(samples, sample_timestamp_overrides, sync_config)
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
@@ -752,7 +874,7 @@ def convert_bag_to_omega_prime(
             if msg_type_name == "ObjectList":
                 for obj in msg.objects:
                     row = _object_to_row(
-                        msg, output_timestamp_nanos=output_timestamp_nanos
+                        obj, output_timestamp_nanos=output_timestamp_nanos
                     )
                     _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
                     yield row
