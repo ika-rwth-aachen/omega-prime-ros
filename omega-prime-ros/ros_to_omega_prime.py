@@ -560,18 +560,12 @@ def convert_bag_to_omega_prime(
     total_sample_count = 0
     base_sample_count = 0
     non_base_sample_count = 0
-    matched_non_base_count = 0
-    unmatched_no_candidate_count = 0
-    unmatched_competing_count = 0
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
         nonlocal total_sample_count
         nonlocal base_sample_count
         nonlocal non_base_sample_count
-        nonlocal matched_non_base_count
-        nonlocal unmatched_no_candidate_count
-        nonlocal unmatched_competing_count
 
         sample_idx = 0
         next_emit_idx = 0
@@ -617,12 +611,10 @@ def convert_bag_to_omega_prime(
                 next_emit_idx += 1
 
         def finalize_base_candidate(base_timestamp_nanos: int) -> None:
-            nonlocal matched_non_base_count
             current_best = base_best_candidate.pop(base_timestamp_nanos, None)
             if current_best is None:
                 return
             _, (winner_idx, winner_type, winner_msg) = current_best
-            matched_non_base_count += 1
             queue_sample_rows(
                 winner_idx,
                 winner_type,
@@ -633,13 +625,10 @@ def convert_bag_to_omega_prime(
         def resolve_non_base(
             sample_idx: int, timestamp_nanos: int, msg_type_name: str, msg: Any
         ) -> None:
-            nonlocal unmatched_no_candidate_count
-            nonlocal unmatched_competing_count
             base_timestamp_nanos = _nearest_base_timestamp(
                 base_timestamps, timestamp_nanos, match_threshold_nanos
             )
             if base_timestamp_nanos is None:
-                unmatched_no_candidate_count += 1
                 queue_sample_rows(sample_idx, msg_type_name, msg, None)
                 return
 
@@ -657,7 +646,6 @@ def convert_bag_to_omega_prime(
                 return
 
             if candidate_key < current_best[0]:
-                unmatched_competing_count += 1
                 losing_idx, losing_type, losing_msg = current_best[1]
                 queue_sample_rows(losing_idx, losing_type, losing_msg, None)
                 base_best_candidate[base_timestamp_nanos] = (
@@ -666,7 +654,6 @@ def convert_bag_to_omega_prime(
                 )
                 return
 
-            unmatched_competing_count += 1
             queue_sample_rows(sample_idx, msg_type_name, msg, None)
 
         for _, msg_type_name, timestamp_nanos, _, msg in iter_bag_messages(
@@ -771,22 +758,10 @@ def convert_bag_to_omega_prime(
                 "all messages keep their original timestamps."
             )
     else:
-        unmatched_non_base_count = (
-            unmatched_no_candidate_count + unmatched_competing_count
-        )
         print(
             "[ros_to_omega_prime] Timestamp snapping kept all "
             f"{total_sample_count} transformed messages "
             f"({base_sample_count} base-topic, {non_base_sample_count} non-base)."
-        )
-        print(
-            "[ros_to_omega_prime] Timestamp snapping summary: "
-            f"base_time_message_type={base_time_message_type}, "
-            f"threshold={match_threshold_nanos}ns, "
-            f"matched={matched_non_base_count}, "
-            f"unmatched={unmatched_non_base_count} "
-            f"(no_candidate={unmatched_no_candidate_count}, "
-            f"competing_nearer_match={unmatched_competing_count})."
         )
 
     if unresolved_projection_timestamps:
