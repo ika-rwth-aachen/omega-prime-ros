@@ -73,28 +73,6 @@ class SyncConfig:
     base_time_topic: BaseTimeTopic
     match_threshold_nanos: int
 
-    def __post_init__(self) -> None:
-        if self.base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
-            supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
-            raise ValueError(
-                f"base_time_topic must be one of {supported}, got {self.base_time_topic!r}"
-            )
-
-        if isinstance(self.match_threshold_nanos, bool):
-            raise ValueError(
-                "match_threshold_nanos must be a non-negative integer number of nanoseconds"
-            )
-
-        threshold_nanos = int(self.match_threshold_nanos)
-        if threshold_nanos != self.match_threshold_nanos:
-            raise ValueError(
-                "match_threshold_nanos must be an integer number of nanoseconds"
-            )
-        if threshold_nanos < 0:
-            raise ValueError("match_threshold_nanos must be non-negative")
-
-        object.__setattr__(self, "match_threshold_nanos", threshold_nanos)
-
 
 def utm_to_epsg(zone: int, northern: bool = True) -> str:
     if not isinstance(zone, int):
