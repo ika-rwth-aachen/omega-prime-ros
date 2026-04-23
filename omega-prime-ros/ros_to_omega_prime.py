@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import math
 import os
-from bisect import bisect_left, bisect_right
+from bisect import bisect_left
 from collections import deque
 from collections.abc import Iterable, Iterator
 from pathlib import Path
@@ -509,182 +509,28 @@ def _warn_if_reappearing_id(
     last_seen_by_idx[idx] = total_nanos
 
 
-def _collect_message_samples(
-    bag_dir: Path,
-    object_list_topic: str | None,
-    fixed_frame: str,
-    projection_frame: str,
-    ego_data_topic: str | None,
-    projection: dict[Any, Any],
-    unresolved_timestamps: set[int] | None = None,
-) -> list[MessageSample]:
-    return list(
-        iter_bag_messages(
-            bag_dir,
-            object_list_topic,
-            fixed_frame,
-            projection_frame,
-            ego_data_topic,
-            projection=projection,
-            unresolved_timestamps=unresolved_timestamps,
-        )
-    )
-
-
-def _build_timestamp_snap_overrides(
-    samples: list[MessageSample],
-    base_time_message_type: BaseTimeMessageType,
-    match_threshold_nanos: int,
-) -> list[int | None]:
-    """Compute output timestamp overrides for non-base samples.
-
-    The returned list is aligned with ``samples``. Each element is either the
-    snapped base timestamp for that sample or ``None`` when the sample should
-    keep its original timestamp.
-    """
-    overrides: list[int | None] = [None] * len(samples)
-    threshold_nanos = match_threshold_nanos
-    base_timestamps = sorted(
-        {
-            timestamp_nanos
-            for _, msg_type_name, timestamp_nanos, _, _ in samples
-            if msg_type_name == base_time_message_type
-        }
-    )
+def _nearest_base_timestamp(
+    base_timestamps: list[int], timestamp_nanos: int, threshold_nanos: int
+) -> int | None:
     if not base_timestamps:
-        return overrides
+        return None
 
-    candidate_matches: list[tuple[int, int, int, int]] = []
-    for sample_idx, (_, msg_type_name, sample_timestamp_nanos, _, _) in enumerate(
-        samples
-    ):
-        if (
-            msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES
-            or msg_type_name == base_time_message_type
-        ):
+    insert_pos = bisect_left(base_timestamps, timestamp_nanos)
+    best_candidate: tuple[int, int] | None = None
+    for base_pos in (insert_pos - 1, insert_pos):
+        if base_pos < 0 or base_pos >= len(base_timestamps):
             continue
-
-        insert_pos = bisect_left(base_timestamps, sample_timestamp_nanos)
-        best_candidate: tuple[int, int, int, int] | None = None
-        for base_pos in (insert_pos - 1, insert_pos):
-            if base_pos < 0 or base_pos >= len(base_timestamps):
-                continue
-            base_timestamp_nanos = base_timestamps[base_pos]
-            distance_nanos = abs(base_timestamp_nanos - sample_timestamp_nanos)
-            if distance_nanos > threshold_nanos:
-                continue
-            candidate = (
-                distance_nanos,
-                base_timestamp_nanos,
-                sample_timestamp_nanos,
-                sample_idx,
-            )
-            if best_candidate is None or candidate < best_candidate:
-                best_candidate = candidate
-
-        if best_candidate is not None:
-            candidate_matches.append(best_candidate)
-
-    assigned_base_timestamps: set[int] = set()
-    for _, base_timestamp_nanos, _, sample_idx in sorted(candidate_matches):
-        if base_timestamp_nanos in assigned_base_timestamps:
+        base_timestamp_nanos = base_timestamps[base_pos]
+        distance_nanos = abs(base_timestamp_nanos - timestamp_nanos)
+        if distance_nanos > threshold_nanos:
             continue
-        overrides[sample_idx] = base_timestamp_nanos
-        assigned_base_timestamps.add(base_timestamp_nanos)
-    return overrides
+        candidate = (distance_nanos, base_timestamp_nanos)
+        if best_candidate is None or candidate < best_candidate:
+            best_candidate = candidate
 
-
-def _validate_and_report_timestamp_snapping(
-    samples: list[MessageSample],
-    overrides: list[int | None],
-    base_time_message_type: BaseTimeMessageType,
-    match_threshold_nanos: int,
-) -> None:
-    if len(samples) != len(overrides):
-        raise ValueError(
-            "Timestamp snapping overrides must align one-to-one with collected samples"
-        )
-
-    base_message_type = base_time_message_type
-    threshold_nanos = match_threshold_nanos
-    base_timestamps = sorted(
-        timestamp_nanos
-        for _, msg_type_name, timestamp_nanos, _, _ in samples
-        if msg_type_name == base_message_type
-    )
-    base_timestamp_set = set(base_timestamps)
-
-    base_sample_count = 0
-    non_base_sample_count = 0
-    matched_non_base_count = 0
-    unmatched_no_candidate_count = 0
-    unmatched_competing_count = 0
-    seen_assigned_base_timestamps: set[int] = set()
-
-    for (_, msg_type_name, timestamp_nanos, _, _), override in zip(
-        samples, overrides, strict=True
-    ):
-        if msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
-            continue
-
-        if msg_type_name == base_message_type:
-            base_sample_count += 1
-            if override is not None:
-                raise ValueError(
-                    "Base topic samples must keep their original timestamps"
-                )
-            continue
-
-        non_base_sample_count += 1
-        if override is None:
-            lower_bound = timestamp_nanos - threshold_nanos
-            upper_bound = timestamp_nanos + threshold_nanos
-            has_candidate = bisect_left(base_timestamps, lower_bound) != bisect_right(
-                base_timestamps, upper_bound
-            )
-            if has_candidate:
-                unmatched_competing_count += 1
-            else:
-                unmatched_no_candidate_count += 1
-            continue
-
-        if override not in base_timestamp_set:
-            raise ValueError(
-                "Timestamp snap override must reference an existing base topic timestamp"
-            )
-        if abs(override - timestamp_nanos) > threshold_nanos:
-            raise ValueError("Timestamp snap override exceeds the configured threshold")
-        if override in seen_assigned_base_timestamps:
-            raise ValueError(
-                "At most one non-base sample may snap to a given base timestamp"
-            )
-
-        seen_assigned_base_timestamps.add(override)
-        matched_non_base_count += 1
-
-    if not base_sample_count or not non_base_sample_count:
-        if samples:
-            print(
-                "[ros_to_omega_prime] Timestamp snapping skipped because only one supported topic is present; "
-                "all messages keep their original timestamps."
-            )
-        return
-
-    unmatched_non_base_count = unmatched_no_candidate_count + unmatched_competing_count
-    print(
-        "[ros_to_omega_prime] Timestamp snapping kept all "
-        f"{len(samples)} transformed messages "
-        f"({base_sample_count} base-topic, {non_base_sample_count} non-base)."
-    )
-    print(
-        "[ros_to_omega_prime] Timestamp snapping summary: "
-        f"base_time_message_type={base_message_type}, "
-        f"threshold={threshold_nanos}ns, "
-        f"matched={matched_non_base_count}, "
-        f"unmatched={unmatched_non_base_count} "
-        f"(no_candidate={unmatched_no_candidate_count}, "
-        f"competing_nearer_match={unmatched_competing_count})."
-    )
+    if best_candidate is None:
+        return None
+    return best_candidate[1]
 
 
 def convert_bag_to_omega_prime(
@@ -704,46 +550,238 @@ def convert_bag_to_omega_prime(
     unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
-    samples = _collect_message_samples(
-        bag_dir,
-        object_list_topic,
-        fixed_frame,
-        projection_frame,
-        ego_data_topic,
-        projection=projections,
-        unresolved_timestamps=unresolved_projection_timestamps,
-    )
-    sample_timestamp_overrides = _build_timestamp_snap_overrides(
-        samples, base_time_message_type, match_threshold_nanos
-    )
-    _validate_and_report_timestamp_snapping(
-        samples,
-        sample_timestamp_overrides,
-        base_time_message_type,
-        match_threshold_nanos,
-    )
+    total_sample_count = 0
+    base_sample_count = 0
+    non_base_sample_count = 0
+    matched_non_base_count = 0
+    unmatched_no_candidate_count = 0
+    unmatched_competing_count = 0
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for (_, msg_type_name, _, _, msg), output_timestamp_nanos in zip(
-            samples, sample_timestamp_overrides, strict=True
-        ):
+        nonlocal total_sample_count
+        nonlocal base_sample_count
+        nonlocal non_base_sample_count
+        nonlocal matched_non_base_count
+        nonlocal unmatched_no_candidate_count
+        nonlocal unmatched_competing_count
+
+        sample_idx = 0
+        next_emit_idx = 0
+        ready_rows: dict[int, list[dict[str, Any]]] = {}
+        pending_non_base: deque[tuple[int, int, str, Any]] = deque()
+        base_timestamps: list[int] = []
+        base_best_candidate: dict[int, tuple[tuple[int, int, int], tuple[int, str, Any]]] = {}
+        latest_base_timestamp: int | None = None
+        last_sample_timestamp: int | None = None
+        stream_in_order = True
+
+        def queue_sample_rows(
+            sample_idx: int,
+            msg_type_name: str,
+            msg: Any,
+            output_timestamp_nanos: int | None,
+        ) -> None:
+            nonlocal host_vehicle_id
+            if sample_idx in ready_rows:
+                raise ValueError(
+                    "Timestamp snapping tried to finalize the same sample more than once."
+                )
+
             if msg_type_name == "EgoData":
                 row = _object_to_row(msg, output_timestamp_nanos=output_timestamp_nanos)
                 if host_vehicle_id is None:
                     host_vehicle_id = int(row["idx"])
-                yield row
-                continue
+                ready_rows[sample_idx] = [row]
+                return
 
-            if msg_type_name == "ObjectList":
-                for obj in msg.objects:
-                    row = _object_to_row(
-                        obj, output_timestamp_nanos=output_timestamp_nanos
-                    )
-                    _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
+            rows: list[dict[str, Any]] = []
+            for obj in msg.objects:
+                row = _object_to_row(obj, output_timestamp_nanos=output_timestamp_nanos)
+                _warn_if_reappearing_id(row, last_seen_by_idx, warn_gap_seconds)
+                rows.append(row)
+            ready_rows[sample_idx] = rows
+
+        def flush_ready() -> Iterator[dict[str, Any]]:
+            nonlocal next_emit_idx
+            while next_emit_idx in ready_rows:
+                for row in ready_rows.pop(next_emit_idx):
                     yield row
+                next_emit_idx += 1
+
+        def finalize_base_candidate(base_timestamp_nanos: int) -> None:
+            nonlocal matched_non_base_count
+            current_best = base_best_candidate.pop(base_timestamp_nanos, None)
+            if current_best is None:
+                return
+            _, (winner_idx, winner_type, winner_msg) = current_best
+            matched_non_base_count += 1
+            queue_sample_rows(
+                winner_idx,
+                winner_type,
+                winner_msg,
+                output_timestamp_nanos=base_timestamp_nanos,
+            )
+
+        def resolve_non_base(
+            sample_idx: int, timestamp_nanos: int, msg_type_name: str, msg: Any
+        ) -> None:
+            nonlocal unmatched_no_candidate_count
+            nonlocal unmatched_competing_count
+            base_timestamp_nanos = _nearest_base_timestamp(
+                base_timestamps, timestamp_nanos, match_threshold_nanos
+            )
+            if base_timestamp_nanos is None:
+                unmatched_no_candidate_count += 1
+                queue_sample_rows(sample_idx, msg_type_name, msg, None)
+                return
+
+            candidate_key = (
+                abs(base_timestamp_nanos - timestamp_nanos),
+                timestamp_nanos,
+                sample_idx,
+            )
+            current_best = base_best_candidate.get(base_timestamp_nanos)
+            if current_best is None:
+                base_best_candidate[base_timestamp_nanos] = (
+                    candidate_key,
+                    (sample_idx, msg_type_name, msg),
+                )
+                return
+
+            if candidate_key < current_best[0]:
+                unmatched_competing_count += 1
+                losing_idx, losing_type, losing_msg = current_best[1]
+                queue_sample_rows(losing_idx, losing_type, losing_msg, None)
+                base_best_candidate[base_timestamp_nanos] = (
+                    candidate_key,
+                    (sample_idx, msg_type_name, msg),
+                )
+                return
+
+            unmatched_competing_count += 1
+            queue_sample_rows(sample_idx, msg_type_name, msg, None)
+
+        for _, msg_type_name, timestamp_nanos, _, msg in iter_bag_messages(
+            bag_dir,
+            object_list_topic,
+            fixed_frame,
+            projection_frame,
+            ego_data_topic,
+            projection=projections,
+            unresolved_timestamps=unresolved_projection_timestamps,
+        ):
+            if (
+                last_sample_timestamp is not None
+                and timestamp_nanos < last_sample_timestamp
+            ):
+                stream_in_order = False
+            last_sample_timestamp = timestamp_nanos
+            total_sample_count += 1
+            if stream_in_order:
+                while (
+                    pending_non_base
+                    and pending_non_base[0][1] + match_threshold_nanos < timestamp_nanos
+                ):
+                    resolve_non_base(*pending_non_base.popleft())
+
+            if msg_type_name == base_time_message_type:
+                base_sample_count += 1
+                is_new_base_timestamp = False
+                if not base_timestamps:
+                    base_timestamps.append(timestamp_nanos)
+                    is_new_base_timestamp = True
+                elif timestamp_nanos > base_timestamps[-1]:
+                    base_timestamps.append(timestamp_nanos)
+                    is_new_base_timestamp = True
+                elif timestamp_nanos < base_timestamps[-1]:
+                    stream_in_order = False
+                    insert_pos = bisect_left(base_timestamps, timestamp_nanos)
+                    if (
+                        insert_pos == len(base_timestamps)
+                        or base_timestamps[insert_pos] != timestamp_nanos
+                    ):
+                        base_timestamps.insert(insert_pos, timestamp_nanos)
+                        is_new_base_timestamp = True
+
+                if is_new_base_timestamp and pending_non_base:
+                    if stream_in_order:
+                        while (
+                            pending_non_base
+                            and pending_non_base[0][1] <= timestamp_nanos
+                        ):
+                            resolve_non_base(*pending_non_base.popleft())
+                    else:
+                        still_pending: deque[tuple[int, int, str, Any]] = deque()
+                        while pending_non_base:
+                            pending_sample = pending_non_base.popleft()
+                            if pending_sample[1] <= timestamp_nanos:
+                                resolve_non_base(*pending_sample)
+                            else:
+                                still_pending.append(pending_sample)
+                        pending_non_base = still_pending
+
+                if (
+                    is_new_base_timestamp
+                    and stream_in_order
+                    and latest_base_timestamp is not None
+                    and timestamp_nanos > latest_base_timestamp
+                ):
+                    finalize_base_candidate(latest_base_timestamp)
+                if is_new_base_timestamp and (
+                    latest_base_timestamp is None
+                    or timestamp_nanos >= latest_base_timestamp
+                ):
+                    latest_base_timestamp = timestamp_nanos
+
+                queue_sample_rows(sample_idx, msg_type_name, msg, None)
+            else:
+                non_base_sample_count += 1
+                if base_timestamps and timestamp_nanos <= base_timestamps[-1]:
+                    resolve_non_base(sample_idx, timestamp_nanos, msg_type_name, msg)
+                else:
+                    pending_non_base.append(
+                        (sample_idx, timestamp_nanos, msg_type_name, msg)
+                    )
+
+            yield from flush_ready()
+            sample_idx += 1
+
+        while pending_non_base:
+            resolve_non_base(*pending_non_base.popleft())
+        for base_timestamp_nanos in sorted(base_best_candidate):
+            finalize_base_candidate(base_timestamp_nanos)
+
+        yield from flush_ready()
+        if next_emit_idx != sample_idx:
+            raise ValueError("Windowed timestamp snapping did not finalize all samples.")
 
     df = pl.DataFrame(row_iter())
+    if not base_sample_count or not non_base_sample_count:
+        if total_sample_count > 0:
+            print(
+                "[ros_to_omega_prime] Timestamp snapping skipped because only one supported topic is present; "
+                "all messages keep their original timestamps."
+            )
+    else:
+        unmatched_non_base_count = (
+            unmatched_no_candidate_count + unmatched_competing_count
+        )
+        print(
+            "[ros_to_omega_prime] Timestamp snapping kept all "
+            f"{total_sample_count} transformed messages "
+            f"({base_sample_count} base-topic, {non_base_sample_count} non-base)."
+        )
+        print(
+            "[ros_to_omega_prime] Timestamp snapping summary: "
+            f"base_time_message_type={base_time_message_type}, "
+            f"threshold={match_threshold_nanos}ns, "
+            f"matched={matched_non_base_count}, "
+            f"unmatched={unmatched_non_base_count} "
+            f"(no_candidate={unmatched_no_candidate_count}, "
+            f"competing_nearer_match={unmatched_competing_count})."
+        )
+
     if unresolved_projection_timestamps:
         unresolved_ts = sorted(unresolved_projection_timestamps)
         unresolved_expr = pl.col("total_nanos").is_in(unresolved_ts)
