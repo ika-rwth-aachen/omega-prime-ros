@@ -104,14 +104,6 @@ def _stamp_to_nanos(stamp: Any) -> int:
 def _message_type_name(msg: Any) -> str:
     return getattr(type(msg), "__name__", str(type(msg)))
 
-
-def _message_timestamp_nanos(msg: Any) -> int:
-    header = getattr(msg, "header", None)
-    if header is None or not hasattr(header, "stamp"):
-        raise ValueError(f"Message {_message_type_name(msg)} has no header.stamp")
-    return _stamp_to_nanos(header.stamp)
-
-
 def _object_to_row(obj, output_timestamp_nanos: int | None = None) -> dict[str, Any]:
     obj_type_name = _message_type_name(obj)
 
@@ -123,7 +115,7 @@ def _object_to_row(obj, output_timestamp_nanos: int | None = None) -> dict[str, 
         height = float(pmu.get_height(obj))
 
     elif obj_type_name == "EgoData":
-        total_nanos = _message_timestamp_nanos(obj)
+        total_nanos = _stamp_to_nanos(obj.header.stamp)
         idx = int(obj.vehicle_id)
         width = float(obj.width)
         length = float(obj.length)
@@ -242,7 +234,7 @@ def _normalize_object_list_object_timestamps(msg: Any) -> int:
     if _message_type_name(msg) != "ObjectList":
         raise ValueError(f"Expected ObjectList message, got {_message_type_name(msg)}")
 
-    header_stamp = _message_timestamp_nanos(msg)
+    header_stamp = _stamp_to_nanos(msg.header.stamp)
     normalized_count = 0
 
     for obj in msg.objects:
@@ -268,7 +260,7 @@ def check_object_consistency(msg) -> None:
     if not hasattr(msg, "objects"):
         return
 
-    header_stamp = _message_timestamp_nanos(msg) if hasattr(msg, "header") else None
+    header_stamp = _stamp_to_nanos(msg.header.stamp) if hasattr(msg, "header") else None
     header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
 
     for obj in msg.objects:
@@ -292,21 +284,11 @@ def check_object_consistency(msg) -> None:
 
 
 def _message_to_sample(msg: Any, topic_name: str) -> MessageSample:
-    header = getattr(msg, "header", None)
-    if (
-        header is None
-        or not hasattr(header, "stamp")
-        or not hasattr(header, "frame_id")
-    ):
-        raise ValueError(
-            f"Message {_message_type_name(msg)} cannot be converted into a MessageSample"
-        )
-
     return (
         topic_name,
         _message_type_name(msg),
-        _message_timestamp_nanos(msg),
-        str(header.frame_id),
+        _stamp_to_nanos(msg.header.stamp),
+        str(msg.header.frame_id),
         msg,
     )
 
@@ -487,7 +469,7 @@ def iter_bag_messages(
             check_object_consistency(msg)
 
         if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
-            stamp_time = Time(nanoseconds=_message_timestamp_nanos(msg))
+            stamp_time = Time(nanoseconds=_stamp_to_nanos(msg.header.stamp))
             resolved_msg = _resolve_message_and_projection(
                 msg, msg_type_name, stamp_time, msg_frame_id
             )
