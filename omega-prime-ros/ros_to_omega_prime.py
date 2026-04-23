@@ -10,9 +10,9 @@ folders (identified via metadata.yaml).
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_left, bisect_right
 import math
 import os
+from bisect import bisect_left, bisect_right
 from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -21,18 +21,17 @@ from typing import Any, Literal
 
 import betterosi
 import numpy as np
+import omega_prime
 import perception_msgs_utils as pmu
 import polars as pl
 import yaml
+from omega_prime.map import ProjectionOffset
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
 from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
 from rosidl_runtime_py.utilities import get_message
-from tf2_ros import Buffer, TransformException
 from tf2_perception_msgs import do_transform_ego_data, do_transform_object_list
-
-import omega_prime
-from omega_prime.map import ProjectionOffset
+from tf2_ros import Buffer, TransformException
 
 # Legacy numpy aliases expected by perception_msgs_utils/tf_transformations
 if not hasattr(np, "float"):
@@ -67,18 +66,6 @@ class TimestampSnapCandidate:
     sample_timestamp_nanos: int
     base_sample_idx: int
     sample_idx: int
-
-
-@dataclass(slots=True, frozen=True)
-class TimestampSnapReport:
-    total_sample_count: int
-    base_sample_count: int
-    non_base_sample_count: int
-    matched_non_base_count: int
-    unmatched_non_base_count: int
-    unmatched_no_candidate_count: int
-    unmatched_competing_count: int
-    single_topic_mode: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -734,7 +721,7 @@ def _validate_and_report_timestamp_snapping(
     samples: list[MessageSample],
     overrides: list[int | None],
     sync_config: SyncConfig,
-) -> TimestampSnapReport:
+) -> None:
     if len(samples) != len(overrides):
         raise ValueError(
             "Timestamp snapping overrides must align one-to-one with collected samples"
@@ -799,41 +786,31 @@ def _validate_and_report_timestamp_snapping(
         seen_assigned_base_timestamps.add(override)
         matched_non_base_count += 1
 
+    total_sample_count = len(samples)
     unmatched_non_base_count = unmatched_no_candidate_count + unmatched_competing_count
-    report = TimestampSnapReport(
-        total_sample_count=len(samples),
-        base_sample_count=base_sample_count,
-        non_base_sample_count=non_base_sample_count,
-        matched_non_base_count=matched_non_base_count,
-        unmatched_non_base_count=unmatched_non_base_count,
-        unmatched_no_candidate_count=unmatched_no_candidate_count,
-        unmatched_competing_count=unmatched_competing_count,
-        single_topic_mode=single_topic_mode,
-    )
 
-    if report.single_topic_mode:
-        if report.total_sample_count > 0:
+    if single_topic_mode:
+        if total_sample_count > 0:
             print(
                 "[ros_to_omega_prime] Timestamp snapping skipped because only one supported topic is present; "
                 "all messages keep their original timestamps."
             )
-        return report
+        return
 
     print(
         "[ros_to_omega_prime] Timestamp snapping kept all "
-        f"{report.total_sample_count} transformed messages "
-        f"({report.base_sample_count} base-topic, {report.non_base_sample_count} non-base)."
+        f"{total_sample_count} transformed messages "
+        f"({base_sample_count} base-topic, {non_base_sample_count} non-base)."
     )
     print(
         "[ros_to_omega_prime] Timestamp snapping summary: "
         f"base_time_topic={sync_config.base_time_topic}, "
         f"threshold={sync_config.match_threshold_nanos}ns, "
-        f"matched={report.matched_non_base_count}, "
-        f"unmatched={report.unmatched_non_base_count} "
-        f"(no_candidate={report.unmatched_no_candidate_count}, "
-        f"competing_nearer_match={report.unmatched_competing_count})."
+        f"matched={matched_non_base_count}, "
+        f"unmatched={unmatched_non_base_count} "
+        f"(no_candidate={unmatched_no_candidate_count}, "
+        f"competing_nearer_match={unmatched_competing_count})."
     )
-    return report
 
 
 def convert_bag_to_omega_prime(
