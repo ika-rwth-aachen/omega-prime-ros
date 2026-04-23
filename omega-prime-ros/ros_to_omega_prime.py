@@ -46,8 +46,8 @@ if not hasattr(np, "maximum_sctype"):
 _VCT = betterosi.MovingObjectVehicleClassificationType
 _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
-BaseTimeTopic = Literal["ObjectList", "EgoData"]
-_SUPPORTED_BASE_TIME_TOPICS = ("ObjectList", "EgoData")
+BaseTimeMessageType = Literal["ObjectList", "EgoData"]
+_SUPPORTED_BASE_TIME_MESSAGE_TYPES = ("ObjectList", "EgoData")
 
 
 @dataclass(slots=True)
@@ -70,7 +70,7 @@ class TimestampSnapCandidate:
 
 @dataclass(slots=True, frozen=True)
 class SyncConfig:
-    base_time_topic: BaseTimeTopic
+    base_time_message_type: BaseTimeMessageType
     match_threshold_nanos: int
 
 
@@ -633,9 +633,9 @@ def _build_timestamp_snap_overrides(
     base_entries: list[tuple[int, int]] = []
     non_base_entries: list[tuple[int, int]] = []
     for sample_idx, sample in enumerate(samples):
-        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_TOPICS:
+        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
             continue
-        if sample.msg_type_name == sync_config.base_time_topic:
+        if sample.msg_type_name == sync_config.base_time_message_type:
             base_entries.append((sample.timestamp_nanos, sample_idx))
             continue
         non_base_entries.append((sample_idx, sample.timestamp_nanos))
@@ -708,14 +708,14 @@ def _validate_and_report_timestamp_snapping(
     present_supported_topics = {
         sample.msg_type_name
         for sample in samples
-        if sample.msg_type_name in _SUPPORTED_BASE_TIME_TOPICS
+        if sample.msg_type_name in _SUPPORTED_BASE_TIME_MESSAGE_TYPES
     }
     single_topic_mode = len(present_supported_topics) < 2
 
     base_timestamps = sorted(
         sample.timestamp_nanos
         for sample in samples
-        if sample.msg_type_name == sync_config.base_time_topic
+        if sample.msg_type_name == sync_config.base_time_message_type
     )
     base_timestamp_set = set(base_timestamps)
 
@@ -727,10 +727,10 @@ def _validate_and_report_timestamp_snapping(
     non_base_sample_count = 0
 
     for sample, override in zip(samples, overrides, strict=True):
-        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_TOPICS:
+        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
             continue
 
-        if sample.msg_type_name == sync_config.base_time_topic:
+        if sample.msg_type_name == sync_config.base_time_message_type:
             base_sample_count += 1
             if override is not None:
                 raise ValueError(
@@ -782,7 +782,7 @@ def _validate_and_report_timestamp_snapping(
     )
     print(
         "[ros_to_omega_prime] Timestamp snapping summary: "
-        f"base_time_topic={sync_config.base_time_topic}, "
+        f"base_time_message_type={sync_config.base_time_message_type}, "
         f"threshold={sync_config.match_threshold_nanos}ns, "
         f"matched={matched_non_base_count}, "
         f"unmatched={unmatched_non_base_count} "
@@ -913,11 +913,11 @@ def _parse_args() -> argparse.Namespace:
     env_object_list_topic = os.environ.get("OBJECT_LIST_TOPIC", None)
     env_fixed_frame = os.environ.get("FIXED_FRAME", "utm_32N")
     env_projection_frame = os.environ.get("PROJECTION_FRAME", "map")
-    env_base_time_topic = os.environ.get("BASE_TIME_TOPIC", "ObjectList")
-    if env_base_time_topic not in _SUPPORTED_BASE_TIME_TOPICS:
-        supported = ", ".join(_SUPPORTED_BASE_TIME_TOPICS)
+    env_base_time_message_type = os.environ.get("BASE_TIME_MESSAGE_TYPE", "ObjectList")
+    if env_base_time_message_type not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
+        supported = ", ".join(_SUPPORTED_BASE_TIME_MESSAGE_TYPES)
         raise ValueError(
-            f"BASE_TIME_TOPIC must be one of {supported}, got {env_base_time_topic!r}"
+            f"BASE_TIME_MESSAGE_TYPE must be one of {supported}, got {env_base_time_message_type!r}"
         )
     env_match_threshold_nanos_raw = os.environ.get("MATCH_THRESHOLD_NANOS", "0")
     try:
@@ -971,10 +971,10 @@ def _parse_args() -> argparse.Namespace:
         help="Data gets transformed into this frame (default: PROJECTION_FRAME or None)",
     )
     parser.add_argument(
-        "--base_time_topic",
-        choices=_SUPPORTED_BASE_TIME_TOPICS,
-        default=env_base_time_topic,
-        help="Topic whose timestamps act as the snapping reference (default: BASE_TIME_TOPIC or ObjectList)",
+        "--base_time_message_type",
+        choices=_SUPPORTED_BASE_TIME_MESSAGE_TYPES,
+        default=env_base_time_message_type,
+        help="Message type whose timestamps act as the snapping reference (default: BASE_TIME_MESSAGE_TYPE or ObjectList)",
     )
     parser.add_argument(
         "--match_threshold_nanos",
@@ -1043,7 +1043,7 @@ def main() -> None:
         raise ValueError("When --fixed_frame is 'map', --map must be specified")
 
     sync_config = SyncConfig(
-        base_time_topic=args.base_time_topic,
+        base_time_message_type=args.base_time_message_type,
         match_threshold_nanos=args.match_threshold_nanos,
     )
 

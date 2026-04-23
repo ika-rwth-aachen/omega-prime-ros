@@ -29,7 +29,7 @@ Use the Docker image to run the converter automatically. It will discovers `rosb
 docker run --rm -it \
     -e EGO_DATA_TOPIC=</your/ego_data_topic> \
     -e OBJECT_LIST_TOPIC=</your/object_list_topic> \
-    -e BASE_TIME_TOPIC=<"ObjectList"/or/"EgoData"> \
+    -e BASE_TIME_MESSAGE_TYPE=<"ObjectList"/or/"EgoData"> \
     -e MATCH_THRESHOLD_NANOS=0 \
     -v <path/to/bags>:/input \
     -v </path/to/map.xodr>:/map/map.xodr \
@@ -60,7 +60,7 @@ Environment variables and CLI flags:
 - `OBJECT_LIST_TOPIC` / `--object_list_topic`
 - `FIXED_FRAME` / `--fixed_frame` (default `utm_32N`)
 - `PROJECTION_FRAME` / `--projection_frame` (default `map`)
-- `BASE_TIME_TOPIC` / `--base_time_topic` (default `ObjectList`, allowed values: `ObjectList`, `EgoData`)
+- `BASE_TIME_MESSAGE_TYPE` / `--base_time_message_type` (default `ObjectList`, allowed values: `ObjectList`, `EgoData`)
 - `MATCH_THRESHOLD_NANOS` / `--match_threshold_nanos` (default `0`)
 - `MAP` / `--map` (default `/map/map.xodr`)
 - `BAG` / `--bag` to process explicit bags (supports comma-separated paths)
@@ -70,7 +70,7 @@ Environment variables and CLI flags:
 ### Timestamp Synchronization
 - Timestamp synchronization is applied only after the normal per-message TF transformation step has completed.
 - Each message is still transformed using its own original message timestamp.
-- `BASE_TIME_TOPIC` selects which topic provides the reference timestamps for snapping. Supported values are `ObjectList` and `EgoData`.
+- `BASE_TIME_MESSAGE_TYPE` selects which message type provides the reference timestamps for snapping. Supported values are `ObjectList` and `EgoData`.
 - `MATCH_THRESHOLD_NANOS` defines the maximum absolute time difference for snapping a non-base message to the nearest base-topic timestamp.
 - The base-topic message always keeps its own timestamp.
 - A non-base message is snapped only when the nearest base-topic timestamp is within the threshold.
