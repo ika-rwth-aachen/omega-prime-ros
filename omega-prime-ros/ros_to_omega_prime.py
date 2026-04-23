@@ -544,47 +544,39 @@ def _build_timestamp_snap_overrides(
     """
     overrides: list[int | None] = [None] * len(samples)
     threshold_nanos = match_threshold_nanos
-    base_entries: list[tuple[int, int]] = []
-    non_base_entries: list[tuple[int, int]] = []
-    for sample_idx, (_, msg_type_name, timestamp_nanos, _, _) in enumerate(samples):
-        if msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
-            continue
-        if msg_type_name == base_time_message_type:
-            base_entries.append((timestamp_nanos, sample_idx))
-            continue
-        non_base_entries.append((sample_idx, timestamp_nanos))
-
-    if not base_entries or not non_base_entries:
+    base_timestamps = sorted(
+        {
+            timestamp_nanos
+            for _, msg_type_name, timestamp_nanos, _, _ in samples
+            if msg_type_name == base_time_message_type
+        }
+    )
+    if not base_timestamps:
         return overrides
 
-    base_entries.sort(key=lambda item: (item[0], item[1]))
-    unique_base_entries: list[tuple[int, int]] = []
-    for timestamp_nanos, base_sample_idx in base_entries:
-        if unique_base_entries and unique_base_entries[-1][0] == timestamp_nanos:
+    candidate_matches: list[tuple[int, int, int, int]] = []
+    for sample_idx, (_, msg_type_name, sample_timestamp_nanos, _, _) in enumerate(
+        samples
+    ):
+        if (
+            msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES
+            or msg_type_name == base_time_message_type
+        ):
             continue
-        unique_base_entries.append((timestamp_nanos, base_sample_idx))
 
-    base_timestamps = [timestamp_nanos for timestamp_nanos, _ in unique_base_entries]
-    candidate_matches: list[tuple[int, int, int, int, int]] = []
-
-    for sample_idx, sample_timestamp_nanos in non_base_entries:
         insert_pos = bisect_left(base_timestamps, sample_timestamp_nanos)
-        best_candidate: tuple[int, int, int, int, int] | None = None
-
+        best_candidate: tuple[int, int, int, int] | None = None
         for base_pos in (insert_pos - 1, insert_pos):
-            if base_pos < 0 or base_pos >= len(unique_base_entries):
+            if base_pos < 0 or base_pos >= len(base_timestamps):
                 continue
-
-            base_timestamp_nanos, base_sample_idx = unique_base_entries[base_pos]
+            base_timestamp_nanos = base_timestamps[base_pos]
             distance_nanos = abs(base_timestamp_nanos - sample_timestamp_nanos)
             if distance_nanos > threshold_nanos:
                 continue
-
             candidate = (
                 distance_nanos,
                 base_timestamp_nanos,
                 sample_timestamp_nanos,
-                base_sample_idx,
                 sample_idx,
             )
             if best_candidate is None or candidate < best_candidate:
@@ -594,13 +586,11 @@ def _build_timestamp_snap_overrides(
             candidate_matches.append(best_candidate)
 
     assigned_base_timestamps: set[int] = set()
-    for _, base_timestamp_nanos, _, _, sample_idx in sorted(candidate_matches):
+    for _, base_timestamp_nanos, _, sample_idx in sorted(candidate_matches):
         if base_timestamp_nanos in assigned_base_timestamps:
             continue
-
         overrides[sample_idx] = base_timestamp_nanos
         assigned_base_timestamps.add(base_timestamp_nanos)
-
     return overrides
 
 
