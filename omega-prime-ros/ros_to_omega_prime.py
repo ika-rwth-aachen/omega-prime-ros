@@ -15,7 +15,6 @@ import os
 from bisect import bisect_left, bisect_right
 from collections import deque
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -48,30 +47,7 @@ _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
 BaseTimeMessageType = Literal["ObjectList", "EgoData"]
 _SUPPORTED_BASE_TIME_MESSAGE_TYPES = ("ObjectList", "EgoData")
-
-
-@dataclass(slots=True)
-class MessageSample:
-    topic_name: str
-    msg_type_name: str
-    timestamp_nanos: int
-    frame_id: str
-    msg: Any
-
-
-@dataclass(slots=True, frozen=True)
-class TimestampSnapCandidate:
-    distance_nanos: int
-    base_timestamp_nanos: int
-    sample_timestamp_nanos: int
-    base_sample_idx: int
-    sample_idx: int
-
-
-@dataclass(slots=True, frozen=True)
-class SyncConfig:
-    base_time_message_type: BaseTimeMessageType
-    match_threshold_nanos: int
+MessageSample = tuple[str, str, int, str, Any]
 
 
 def utm_to_epsg(zone: int, northern: bool = True) -> str:
@@ -326,12 +302,12 @@ def _message_to_sample(msg: Any, topic_name: str) -> MessageSample:
             f"Message {_message_type_name(msg)} cannot be converted into a MessageSample"
         )
 
-    return MessageSample(
-        topic_name=topic_name,
-        msg_type_name=_message_type_name(msg),
-        timestamp_nanos=_message_timestamp_nanos(msg),
-        frame_id=str(header.frame_id),
-        msg=msg,
+    return (
+        topic_name,
+        _message_type_name(msg),
+        _message_timestamp_nanos(msg),
+        str(header.frame_id),
+        msg,
     )
 
 
@@ -573,30 +549,10 @@ def _collect_message_samples(
     )
 
 
-def _timestamp_snap_candidate_sort_key(
-    candidate: TimestampSnapCandidate,
-) -> tuple[int, int, int, int, int]:
-    """Return a deterministic sort key for timestamp snapping.
-
-    Tie-break rules:
-    1. Smaller absolute time distance wins.
-    2. If one non-base sample is equally close to two base timestamps, prefer the
-       earlier base timestamp.
-    3. If two non-base samples are equally close to the same base timestamp,
-       prefer the earlier non-base sample timestamp.
-    4. Stable final tie-breaks fall back to sample indices.
-    """
-    return (
-        candidate.distance_nanos,
-        candidate.base_timestamp_nanos,
-        candidate.sample_timestamp_nanos,
-        candidate.base_sample_idx,
-        candidate.sample_idx,
-    )
-
-
 def _build_timestamp_snap_overrides(
-    samples: list[MessageSample], sync_config: SyncConfig
+    samples: list[MessageSample],
+    base_time_message_type: BaseTimeMessageType,
+    match_threshold_nanos: int,
 ) -> list[int | None]:
     """Compute output timestamp overrides for non-base samples.
 
@@ -605,16 +561,16 @@ def _build_timestamp_snap_overrides(
     keep its original timestamp.
     """
     overrides: list[int | None] = [None] * len(samples)
-    threshold_nanos = sync_config.match_threshold_nanos
+    threshold_nanos = match_threshold_nanos
     base_entries: list[tuple[int, int]] = []
     non_base_entries: list[tuple[int, int]] = []
-    for sample_idx, sample in enumerate(samples):
-        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
+    for sample_idx, (_, msg_type_name, timestamp_nanos, _, _) in enumerate(samples):
+        if msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
             continue
-        if sample.msg_type_name == sync_config.base_time_message_type:
-            base_entries.append((sample.timestamp_nanos, sample_idx))
+        if msg_type_name == base_time_message_type:
+            base_entries.append((timestamp_nanos, sample_idx))
             continue
-        non_base_entries.append((sample_idx, sample.timestamp_nanos))
+        non_base_entries.append((sample_idx, timestamp_nanos))
 
     if not base_entries or not non_base_entries:
         return overrides
@@ -627,11 +583,11 @@ def _build_timestamp_snap_overrides(
         unique_base_entries.append((timestamp_nanos, base_sample_idx))
 
     base_timestamps = [timestamp_nanos for timestamp_nanos, _ in unique_base_entries]
-    candidate_matches: list[TimestampSnapCandidate] = []
+    candidate_matches: list[tuple[int, int, int, int, int]] = []
 
     for sample_idx, sample_timestamp_nanos in non_base_entries:
         insert_pos = bisect_left(base_timestamps, sample_timestamp_nanos)
-        best_candidate: TimestampSnapCandidate | None = None
+        best_candidate: tuple[int, int, int, int, int] | None = None
 
         for base_pos in (insert_pos - 1, insert_pos):
             if base_pos < 0 or base_pos >= len(unique_base_entries):
@@ -642,31 +598,26 @@ def _build_timestamp_snap_overrides(
             if distance_nanos > threshold_nanos:
                 continue
 
-            candidate = TimestampSnapCandidate(
-                distance_nanos=distance_nanos,
-                base_timestamp_nanos=base_timestamp_nanos,
-                sample_timestamp_nanos=sample_timestamp_nanos,
-                base_sample_idx=base_sample_idx,
-                sample_idx=sample_idx,
+            candidate = (
+                distance_nanos,
+                base_timestamp_nanos,
+                sample_timestamp_nanos,
+                base_sample_idx,
+                sample_idx,
             )
-            if best_candidate is None:
-                best_candidate = candidate
-                continue
-            if _timestamp_snap_candidate_sort_key(
-                candidate
-            ) < _timestamp_snap_candidate_sort_key(best_candidate):
+            if best_candidate is None or candidate < best_candidate:
                 best_candidate = candidate
 
         if best_candidate is not None:
             candidate_matches.append(best_candidate)
 
     assigned_base_timestamps: set[int] = set()
-    for candidate in sorted(candidate_matches, key=_timestamp_snap_candidate_sort_key):
-        if candidate.base_timestamp_nanos in assigned_base_timestamps:
+    for _, base_timestamp_nanos, _, _, sample_idx in sorted(candidate_matches):
+        if base_timestamp_nanos in assigned_base_timestamps:
             continue
 
-        overrides[candidate.sample_idx] = candidate.base_timestamp_nanos
-        assigned_base_timestamps.add(candidate.base_timestamp_nanos)
+        overrides[sample_idx] = base_timestamp_nanos
+        assigned_base_timestamps.add(base_timestamp_nanos)
 
     return overrides
 
@@ -674,19 +625,20 @@ def _build_timestamp_snap_overrides(
 def _validate_and_report_timestamp_snapping(
     samples: list[MessageSample],
     overrides: list[int | None],
-    sync_config: SyncConfig,
+    base_time_message_type: BaseTimeMessageType,
+    match_threshold_nanos: int,
 ) -> None:
     if len(samples) != len(overrides):
         raise ValueError(
             "Timestamp snapping overrides must align one-to-one with collected samples"
         )
 
-    base_message_type = sync_config.base_time_message_type
-    threshold_nanos = sync_config.match_threshold_nanos
+    base_message_type = base_time_message_type
+    threshold_nanos = match_threshold_nanos
     base_timestamps = sorted(
-        sample.timestamp_nanos
-        for sample in samples
-        if sample.msg_type_name == base_message_type
+        timestamp_nanos
+        for _, msg_type_name, timestamp_nanos, _, _ in samples
+        if msg_type_name == base_message_type
     )
     base_timestamp_set = set(base_timestamps)
 
@@ -697,11 +649,13 @@ def _validate_and_report_timestamp_snapping(
     unmatched_competing_count = 0
     seen_assigned_base_timestamps: set[int] = set()
 
-    for sample, override in zip(samples, overrides, strict=True):
-        if sample.msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
+    for (_, msg_type_name, timestamp_nanos, _, _), override in zip(
+        samples, overrides, strict=True
+    ):
+        if msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
             continue
 
-        if sample.msg_type_name == base_message_type:
+        if msg_type_name == base_message_type:
             base_sample_count += 1
             if override is not None:
                 raise ValueError(
@@ -711,8 +665,8 @@ def _validate_and_report_timestamp_snapping(
 
         non_base_sample_count += 1
         if override is None:
-            lower_bound = sample.timestamp_nanos - threshold_nanos
-            upper_bound = sample.timestamp_nanos + threshold_nanos
+            lower_bound = timestamp_nanos - threshold_nanos
+            upper_bound = timestamp_nanos + threshold_nanos
             has_candidate = bisect_left(base_timestamps, lower_bound) != bisect_right(
                 base_timestamps, upper_bound
             )
@@ -726,7 +680,7 @@ def _validate_and_report_timestamp_snapping(
             raise ValueError(
                 "Timestamp snap override must reference an existing base topic timestamp"
             )
-        if abs(override - sample.timestamp_nanos) > threshold_nanos:
+        if abs(override - timestamp_nanos) > threshold_nanos:
             raise ValueError("Timestamp snap override exceeds the configured threshold")
         if override in seen_assigned_base_timestamps:
             raise ValueError(
@@ -768,7 +722,8 @@ def convert_bag_to_omega_prime(
     object_list_topic: str | None,
     fixed_frame: str,
     projection_frame: str,
-    sync_config: SyncConfig,
+    base_time_message_type: BaseTimeMessageType,
+    match_threshold_nanos: int,
     map_path: Path | None = None,
     validate: bool = False,
     warn_gap_seconds: float = 3.0,
@@ -786,19 +741,21 @@ def convert_bag_to_omega_prime(
         projection=projections,
         unresolved_timestamps=unresolved_projection_timestamps,
     )
-    sample_timestamp_overrides = _build_timestamp_snap_overrides(samples, sync_config)
+    sample_timestamp_overrides = _build_timestamp_snap_overrides(
+        samples, base_time_message_type, match_threshold_nanos
+    )
     _validate_and_report_timestamp_snapping(
-        samples, sample_timestamp_overrides, sync_config
+        samples,
+        sample_timestamp_overrides,
+        base_time_message_type,
+        match_threshold_nanos,
     )
 
     def row_iter() -> Iterable[dict[str, Any]]:
         nonlocal host_vehicle_id
-        for sample, output_timestamp_nanos in zip(
+        for (_, msg_type_name, _, _, msg), output_timestamp_nanos in zip(
             samples, sample_timestamp_overrides, strict=True
         ):
-            msg = sample.msg
-            msg_type_name = sample.msg_type_name
-
             if msg_type_name == "EgoData":
                 row = _object_to_row(msg, output_timestamp_nanos=output_timestamp_nanos)
                 if host_vehicle_id is None:
@@ -1012,11 +969,6 @@ def main() -> None:
     if args.fixed_frame == "map" and map_path and not map_path.exists():
         raise ValueError("When --fixed_frame is 'map', --map must be specified")
 
-    sync_config = SyncConfig(
-        base_time_message_type=args.base_time_message_type,
-        match_threshold_nanos=args.match_threshold_nanos,
-    )
-
     for bag in bags:
         if map_path and map_path.exists():
             print(
@@ -1031,7 +983,8 @@ def main() -> None:
             object_list_topic=args.object_list_topic,
             fixed_frame=args.fixed_frame,
             projection_frame=args.projection_frame,
-            sync_config=sync_config,
+            base_time_message_type=args.base_time_message_type,
+            match_threshold_nanos=args.match_threshold_nanos,
             map_path=map_path,
             validate=args.validate,
             warn_gap_seconds=args.warn_gap_seconds,
