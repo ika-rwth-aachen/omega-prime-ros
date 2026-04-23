@@ -681,32 +681,27 @@ def _validate_and_report_timestamp_snapping(
             "Timestamp snapping overrides must align one-to-one with collected samples"
         )
 
-    present_supported_topics = {
-        sample.msg_type_name
-        for sample in samples
-        if sample.msg_type_name in _SUPPORTED_BASE_TIME_MESSAGE_TYPES
-    }
-    single_topic_mode = len(present_supported_topics) < 2
-
+    base_message_type = sync_config.base_time_message_type
+    threshold_nanos = sync_config.match_threshold_nanos
     base_timestamps = sorted(
         sample.timestamp_nanos
         for sample in samples
-        if sample.msg_type_name == sync_config.base_time_message_type
+        if sample.msg_type_name == base_message_type
     )
     base_timestamp_set = set(base_timestamps)
 
+    base_sample_count = 0
+    non_base_sample_count = 0
     matched_non_base_count = 0
     unmatched_no_candidate_count = 0
     unmatched_competing_count = 0
     seen_assigned_base_timestamps: set[int] = set()
-    base_sample_count = 0
-    non_base_sample_count = 0
 
     for sample, override in zip(samples, overrides, strict=True):
         if sample.msg_type_name not in _SUPPORTED_BASE_TIME_MESSAGE_TYPES:
             continue
 
-        if sample.msg_type_name == sync_config.base_time_message_type:
+        if sample.msg_type_name == base_message_type:
             base_sample_count += 1
             if override is not None:
                 raise ValueError(
@@ -716,21 +711,22 @@ def _validate_and_report_timestamp_snapping(
 
         non_base_sample_count += 1
         if override is None:
-            lower_bound = sample.timestamp_nanos - sync_config.match_threshold_nanos
-            upper_bound = sample.timestamp_nanos + sync_config.match_threshold_nanos
-            left = bisect_left(base_timestamps, lower_bound)
-            right = bisect_right(base_timestamps, upper_bound)
-            if left == right:
-                unmatched_no_candidate_count += 1
-            else:
+            lower_bound = sample.timestamp_nanos - threshold_nanos
+            upper_bound = sample.timestamp_nanos + threshold_nanos
+            has_candidate = bisect_left(base_timestamps, lower_bound) != bisect_right(
+                base_timestamps, upper_bound
+            )
+            if has_candidate:
                 unmatched_competing_count += 1
+            else:
+                unmatched_no_candidate_count += 1
             continue
 
         if override not in base_timestamp_set:
             raise ValueError(
                 "Timestamp snap override must reference an existing base topic timestamp"
             )
-        if abs(override - sample.timestamp_nanos) > sync_config.match_threshold_nanos:
+        if abs(override - sample.timestamp_nanos) > threshold_nanos:
             raise ValueError("Timestamp snap override exceeds the configured threshold")
         if override in seen_assigned_base_timestamps:
             raise ValueError(
@@ -740,26 +736,24 @@ def _validate_and_report_timestamp_snapping(
         seen_assigned_base_timestamps.add(override)
         matched_non_base_count += 1
 
-    total_sample_count = len(samples)
-    unmatched_non_base_count = unmatched_no_candidate_count + unmatched_competing_count
-
-    if single_topic_mode:
-        if total_sample_count > 0:
+    if not base_sample_count or not non_base_sample_count:
+        if samples:
             print(
                 "[ros_to_omega_prime] Timestamp snapping skipped because only one supported topic is present; "
                 "all messages keep their original timestamps."
             )
         return
 
+    unmatched_non_base_count = unmatched_no_candidate_count + unmatched_competing_count
     print(
         "[ros_to_omega_prime] Timestamp snapping kept all "
-        f"{total_sample_count} transformed messages "
+        f"{len(samples)} transformed messages "
         f"({base_sample_count} base-topic, {non_base_sample_count} non-base)."
     )
     print(
         "[ros_to_omega_prime] Timestamp snapping summary: "
-        f"base_time_message_type={sync_config.base_time_message_type}, "
-        f"threshold={sync_config.match_threshold_nanos}ns, "
+        f"base_time_message_type={base_message_type}, "
+        f"threshold={threshold_nanos}ns, "
         f"matched={matched_non_base_count}, "
         f"unmatched={unmatched_non_base_count} "
         f"(no_candidate={unmatched_no_candidate_count}, "
