@@ -246,9 +246,6 @@ def _normalize_object_list_object_timestamps(msg: Any) -> int:
         if obj_stamp == header_stamp:
             continue
 
-        print(
-            f"Info: Normalizing Object ID {obj.id} timestamp from {obj_stamp} to ObjectList header timestamp {header_stamp}."
-        )
         _copy_stamp(state_header.stamp, msg.header.stamp)
         normalized_count += 1
 
@@ -367,6 +364,8 @@ def iter_bag_messages(
 
     # Data messages pending because required TF edges are not available yet.
     pending: deque[tuple[Any, str, Time, str, str]] = deque()
+    object_list_count = 0
+    normalized_object_count = 0
 
     def _transform_msg_to_projection(
         msg: Any, msg_type_name: str, transform: Any
@@ -465,7 +464,8 @@ def iter_bag_messages(
             msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))
         )
         if msg_type_name == "ObjectList":
-            _normalize_object_list_object_timestamps(msg)
+            object_list_count += 1
+            normalized_object_count += _normalize_object_list_object_timestamps(msg)
             check_object_consistency(msg)
 
         if hasattr(msg, "header") and hasattr(msg.header, "stamp"):
@@ -484,6 +484,13 @@ def iter_bag_messages(
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
     yield from retry_pending()
+    if object_list_count > 0:
+        if normalized_object_count > 0:
+            print(
+                "[ros_to_omega_prime] ObjectList timestamp normalization: "
+                f"mismatches found and normalized ({normalized_object_count} object timestamps across {object_list_count} ObjectList messages)."
+            )
+
     unresolved_ts = {int(st.nanoseconds) for _, _, st, _, _ in pending}
     if unresolved_timestamps is not None:
         unresolved_timestamps.clear()
