@@ -15,3 +15,7 @@ This file is used to document all notable changes to the project. Each tag/versi
 - Use get_center_pos() instead of get_position() to ensure the x,y,z are always centered aligning with the OSI definition
 - all messages are transformed to `projection_frame`
 - the transformation from `projection_frame` to `fixed_frame` is stored in Recording projection dictionary
+
+## 1.1.1
+
+- Used fixed version for omega-prime (`0.3.2`) and perception_interfaces (`v1.1.0`) in docker build.
