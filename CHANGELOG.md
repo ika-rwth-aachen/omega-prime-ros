@@ -18,4 +18,4 @@ This file is used to document all notable changes to the project. Each tag/versi
 
 ## 1.1.1
 
-- Used fixed version for omega-prime (`3.2.0`) and perception_interfaces (`v1.1.0`) in docker build.
+- Used fixed version for omega-prime (`0.3.2`) and perception_interfaces (`v1.1.0`) in docker build.
