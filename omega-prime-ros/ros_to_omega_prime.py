@@ -76,7 +76,7 @@ def _class_to_osi(obj) -> tuple[int, int, int]:
         2: _VCT.TYPE_BICYCLE,
         11: _VCT.TYPE_TRAILER,
         12: _VCT.TYPE_WHEELCHAIR,
-        13: _VCT.TYPE_STANDUP_SCOOTER,
+        13: _VCT.TYPE_MICROMOBILITY_DEVICE,
         50: _VCT.TYPE_OTHER,
         51: _VCT.TYPE_OTHER,
         52: _VCT.TYPE_OTHER,
