@@ -16,7 +16,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  OMEGA_PRIME_VERSION: 0.3.8
+  OMEGA_PRIME_VERSION: 0.3.9
   PERCEPTION_INTERFACES_VERSION: v1.1.0
 
 jobs:

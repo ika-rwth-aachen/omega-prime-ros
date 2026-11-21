@@ -22,7 +22,8 @@ This file is used to document all notable changes to the project. Each tag/versi
 
 ## Unreleased
 
-- omega-prime `0.3.8` (betterosi `0.9`) in the docker build: the object height is written to OSI (before, the width was written as height) and no host vehicle ID 0 is written without EgoData.
+- omega-prime `0.3.9` (betterosi `0.9`) in the docker build: the object height is written to OSI (before, the width was written as height) and no host vehicle ID 0 is written without EgoData.
+- With omega-prime `0.3.9`, loading a converted file with `apply_proj=True` rotates `yaw`, `vel_x`/`vel_y` and `acc_x`/`acc_y` together with the positions (projection offset yaw, map heading and grid convergence, e.g. about 2.3 deg between UTM 32N and a local transverse Mercator map). Before, only `x`/`y` were transformed. The values from before the projection are kept in the `*_original` columns.
 - Messages that cannot be resolved to the projection frame no longer remove resolved rows of other messages with the same timestamp.
 - The projection offset is stored under every row timestamp; objects whose timestamp differs from the ObjectList header no longer end up without offset (and far away after projection).
 - State models without velocity, acceleration or dimensions (e.g. TRAFFICLIGHT) are converted with 0 for the missing entries instead of aborting.

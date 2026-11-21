@@ -203,6 +203,46 @@ def test_transform_into_projection_frame(tmp_path):
     assert df["total_nanos"].to_list() == [T0 + k * DT for k in range(5)]
 
 
+def test_projection_rotates_directions_with_positions(tmp_path):
+    """omega-prime >= 0.3.9: applying the projection offset rotates yaw and velocity together with x/y."""
+    bag = Bag(tmp_path / "bag")
+    bag.write("/tf_static", "tf2_msgs/msg/TFMessage", tf_msg("utm_32N", "map", T0, UTM_TO_MAP), T0)
+    bag.write(
+        "/tf_static",
+        "tf2_msgs/msg/TFMessage",
+        tf_msg("map", "intersection", T0, MAP_TO_SITE, math.pi / 2),
+        T0,
+    )
+    for k in range(5):
+        ns = T0 + k * DT
+        bag.objects(make_list(ns, "intersection", [make_obj(1, ns, "intersection", 1.0, 0.0, 0.0, 2.0, 0.0)]))
+    bag.close()
+    # The map shares the CRS of the fixed frame and has no offset, so the projection only applies the frame offset.
+    map_path = tmp_path / "map.xodr"
+    map_path.write_text(
+        "<OpenDRIVE><header><geoReference><![CDATA[+proj=utm +zone=32 +datum=WGS84 +units=m +no_defs]]>"
+        "</geoReference></header></OpenDRIVE>"
+    )
+    out = conv.convert_bag_to_omega_prime(
+        bag_dir=bag.path,
+        output_dir=tmp_path / "out",
+        ego_data_topic=None,
+        object_list_topic=OBJ_TOPIC,
+        fixed_frame="utm_32N",
+        projection_frame="intersection",
+        map_path=map_path,
+    )
+
+    gt = read_gts(out)[0]
+    assert gt.proj_frame_offset.yaw == pytest.approx(math.pi / 2)
+    df = omega_prime.Recording.from_file(str(out), apply_proj=True).df.sort("total_nanos", "idx")
+    row = df.row(0, named=True)
+    assert (row["x"], row["y"]) == pytest.approx((SITE_ORIGIN[0], SITE_ORIGIN[1] + 1.0))
+    assert row["yaw"] == pytest.approx(math.pi / 2)
+    assert (row["vel_x"], row["vel_y"]) == pytest.approx((0.0, 2.0), abs=1e-9)
+    assert (row["x_original"], row["yaw_original"], row["vel_x_original"]) == pytest.approx((1.0, 0.0, 2.0))
+
+
 def test_unresolved_messages_do_not_remove_resolved_rows(tmp_path):
     """K1: an unresolvable ObjectList must not delete the EgoData rows of the same timestamp."""
     bag = Bag(tmp_path / "bag")
