@@ -92,6 +92,15 @@ docker build -t ghcr.io/ika-rwth-aachen/omega-prime-ros:latest \
     -f Dockerfile .
 ```
 
+### Tests
+The regression tests in `tests/` write small rosbag2 files and convert them. They need ROS 2 and the Python packages of the image, so run them inside it:
+
+```bash
+docker build -t omega-prime-ros:ci -f Dockerfile .
+docker run --rm -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 -v "$PWD":/repo:ro omega-prime-ros:ci \
+    bash -c 'pip install -q --target /tmp/pytest pytest && cd /tmp && PYTHONPATH=/tmp/pytest:$PYTHONPATH python -m pytest -q /repo/tests'
+```
+
 # Acknowledgements
 
 This package is developed as part of the [SYNERGIES project](https://synergies-ccam.eu).

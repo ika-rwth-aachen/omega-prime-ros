@@ -22,9 +22,10 @@ import numpy as np
 import perception_msgs_utils as pmu
 import polars as pl
 import yaml
+from rclpy.duration import Duration
 from rclpy.serialization import deserialize_message
 from rclpy.time import Time
-from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+from rosbag2_py import ConverterOptions, SequentialReader, StorageFilter, StorageOptions
 from rosidl_runtime_py.utilities import get_message
 from tf2_ros import Buffer, TransformException
 from tf2_perception_msgs import do_transform_ego_data, do_transform_object_list
@@ -46,6 +47,30 @@ _VCT = betterosi.MovingObjectVehicleClassificationType
 _ROLE = betterosi.MovingObjectVehicleClassificationRole
 _MOT = betterosi.MovingObjectType
 
+# A message whose TF is still missing although TF data this much newer has arrived will never resolve.
+_STALE_PENDING_NS = 10_000_000_000
+
+# Classification types of perception_msgs/ObjectClassification that are vehicles in OSI.
+_VEHICLE_MAP = {
+    2: _VCT.BICYCLE,  # BICYCLE
+    3: _VCT.MOTORBIKE,  # MOTORCYCLE
+    4: _VCT.CAR,  # CAR
+    5: _VCT.HEAVY_TRUCK,  # UTILITY (deprecated TRUCK)
+    6: _VCT.DELIVERY_VAN,  # VAN (deprecated)
+    7: _VCT.BUS,  # BUS
+    10: _VCT.TRAIN,  # TRAIN (deprecated)
+    11: _VCT.TRAILER,  # TRAILER (deprecated)
+    12: _VCT.WHEELCHAIR,  # VRU (wheelchairs, strollers)
+    # MICRO: betterosi >= 0.9 knows the OSI micromobility type, older versions only the stand-up scooter
+    13: getattr(_VCT, "MICROMOBILITY_DEVICE", _VCT.STANDUP_SCOOTER),
+    50: _VCT.CAR,  # CAR_UNION (deprecated, use CAR)
+    51: _VCT.HEAVY_TRUCK,  # TRUCK_UNION (deprecated, use UTILITY)
+    52: _VCT.OTHER,  # BIKE_UNION (deprecated, bicycle or motorcycle)
+}
+
+# State entries that a model may lack; they are written as 0 and reported once per model.
+_missing_state_entries: set[tuple[int, str]] = set()
+
 
 def utm_to_epsg(zone: int, northern: bool = True) -> str:
     if not isinstance(zone, int):
@@ -56,7 +81,6 @@ def utm_to_epsg(zone: int, northern: bool = True) -> str:
 
 
 def _class_to_osi(obj) -> tuple[int, int, int]:
-    mot = int(_MOT.TYPE_OTHER)
     role = -1
     subtype = -1
 
@@ -66,34 +90,32 @@ def _class_to_osi(obj) -> tuple[int, int, int]:
     else:
         ct = 0
 
-    vehicle_map = {
-        4: _VCT.TYPE_CAR,
-        5: _VCT.TYPE_HEAVY_TRUCK,
-        6: _VCT.TYPE_DELIVERY_VAN,
-        7: _VCT.TYPE_BUS,
-        10: _VCT.TYPE_TRAIN,
-        3: _VCT.TYPE_MOTORBIKE,
-        2: _VCT.TYPE_BICYCLE,
-        11: _VCT.TYPE_TRAILER,
-        12: _VCT.TYPE_WHEELCHAIR,
-        13: _VCT.TYPE_STANDUP_SCOOTER,
-        50: _VCT.TYPE_OTHER,
-        51: _VCT.TYPE_OTHER,
-        52: _VCT.TYPE_OTHER,
-    }
-
-    if ct == 1:
-        mot = int(_MOT.TYPE_PEDESTRIAN)
+    if ct == 0:  # UNCLASSIFIED or no classification
+        mot = int(_MOT.UNKNOWN)
+    elif ct == 1:
+        mot = int(_MOT.PEDESTRIAN)
     elif ct == 8:
-        mot = int(_MOT.TYPE_ANIMAL)
-    elif ct in vehicle_map:
-        mot = int(_MOT.TYPE_VEHICLE)
-        role = int(_ROLE.ROLE_CIVIL)
-        subtype = int(vehicle_map[ct])
-    elif ct in (0, 9, 100):
-        mot = int(_MOT.TYPE_OTHER)
+        mot = int(_MOT.ANIMAL)
+    elif ct in _VEHICLE_MAP:
+        mot = int(_MOT.VEHICLE)
+        role = int(_ROLE.CIVIL)
+        subtype = int(_VEHICLE_MAP[ct])
+    else:  # ROAD_OBSTACLE (9), UNKNOWN (100) and types this converter does not know
+        mot = int(_MOT.OTHER)
 
     return mot, role, subtype
+
+
+def _state_entry(getter, obj, entry: str, default: float = 0.0) -> float:
+    """Read a state entry; models without this entry (e.g. TRAFFICLIGHT without velocity) give `default`."""
+    try:
+        return float(getter(obj))
+    except (AttributeError, pmu.UnknownStateEntryError):
+        key = (int(obj.state.model_id), entry)
+        if key not in _missing_state_entries:
+            _missing_state_entries.add(key)
+            print(f"Warning: state model {key[0]} has no entry '{entry}'; writing {default}.")
+        return default
 
 
 def _object_to_row(obj) -> dict[str, Any]:
@@ -103,9 +125,9 @@ def _object_to_row(obj) -> dict[str, Any]:
 
     if obj_type_name == "Object":
         idx = int(obj.id)
-        width = float(pmu.get_width(obj))
-        length = float(pmu.get_length(obj))
-        height = float(pmu.get_height(obj))
+        width = _state_entry(pmu.get_width, obj, "width")
+        length = _state_entry(pmu.get_length, obj, "length")
+        height = _state_entry(pmu.get_height, obj, "height")
 
     elif obj_type_name == "EgoData":
         idx = int(obj.vehicle_id)
@@ -117,42 +139,23 @@ def _object_to_row(obj) -> dict[str, Any]:
 
     pos = pmu.get_center_position(obj)
 
-    try:
-        vel = pmu.get_velocity(obj)
-    except AttributeError:
-        vel = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
+    vel_lon = _state_entry(pmu.get_vel_lon, obj, "vel_lon")
+    vel_lat = _state_entry(pmu.get_vel_lat, obj, "vel_lat")
+    acc_lon = _state_entry(pmu.get_acc_lon, obj, "acc_lon")
+    acc_lat = _state_entry(pmu.get_acc_lat, obj, "acc_lat")
 
-    try:
-        acc = pmu.get_acceleration(obj)
-    except AttributeError:
-        acc = pmu.Vector3D(x=0.0, y=0.0, z=0.0)
+    model_id = obj.state.model_id
+    yaw = float(pmu.get_yaw(obj)) if pmu.has_yaw(model_id) else 0.0
+    roll = float(pmu.get_roll(obj)) if pmu.has_roll(model_id) else 0.0
+    pitch = float(pmu.get_pitch(obj)) if pmu.has_pitch(model_id) else 0.0
 
-    yaw = 0.0
-    roll = 0.0
-    pitch = 0.0
-
-    try:
-        if pmu.index_yaw(obj.state.model_id) is not None:
-            yaw = pmu.get_yaw(obj)
-    except pmu.UnknownStateEntryError:
-        yaw = 0.0
-    try:
-        if pmu.index_roll(obj.state.model_id) is not None:
-            roll = pmu.get_roll(obj)
-    except pmu.UnknownStateEntryError:
-        roll = 0.0
-    try:
-        if pmu.index_pitch(obj.state.model_id) is not None:
-            pitch = pmu.get_pitch(obj)
-    except pmu.UnknownStateEntryError:
-        pitch = 0.0
-
+    # perception_msgs store velocity/acceleration along the object axes (lon/lat), OSI in the parent frame (x/y)
     cos_yaw = math.cos(yaw)
     sin_yaw = math.sin(yaw)
-    vel_x = vel.x * cos_yaw - vel.y * sin_yaw
-    vel_y = vel.x * sin_yaw + vel.y * cos_yaw
-    acc_x = acc.x * cos_yaw - acc.y * sin_yaw
-    acc_y = acc.x * sin_yaw + acc.y * cos_yaw
+    vel_x = vel_lon * cos_yaw - vel_lat * sin_yaw
+    vel_y = vel_lon * sin_yaw + vel_lat * cos_yaw
+    acc_x = acc_lon * cos_yaw - acc_lat * sin_yaw
+    acc_y = acc_lon * sin_yaw + acc_lat * cos_yaw
 
     mot, role, subtype = _class_to_osi(obj)
 
@@ -164,16 +167,16 @@ def _object_to_row(obj) -> dict[str, Any]:
         "z": float(getattr(pos, "z", 0.0)),
         "vel_x": float(vel_x),
         "vel_y": float(vel_y),
-        "vel_z": float(getattr(vel, "z", 0.0)),
+        "vel_z": 0.0,
         "acc_x": float(acc_x),
         "acc_y": float(acc_y),
-        "acc_z": float(getattr(acc, "z", 0.0)),
+        "acc_z": 0.0,
         "length": length,
         "width": width,
         "height": height,
-        "roll": float(roll),
-        "pitch": float(pitch),
-        "yaw": float(yaw),
+        "roll": roll,
+        "pitch": pitch,
+        "yaw": yaw,
         "type": int(mot),
         "role": int(role),
         "subtype": int(subtype),
@@ -188,37 +191,27 @@ def _load_metadata(bag_dir: Path) -> dict[str, Any]:
         return yaml.safe_load(fh)
 
 
-def _extract_proj_offset(msg) -> tuple[int, ProjectionOffset]:
+def _extract_proj_offset(msg) -> ProjectionOffset:
     transformation = msg.transforms[0] if hasattr(msg, "transforms") else msg
     translation = transformation.transform.translation
     rotation = transformation.transform.rotation
-    ts = int(Time.from_msg(transformation.header.stamp).nanoseconds)
 
-    offset = ProjectionOffset(
+    return ProjectionOffset(
         x=float(translation.x if hasattr(translation, "x") else 0.0),
         y=float(translation.y if hasattr(translation, "y") else 0.0),
         z=float(translation.z if hasattr(translation, "z") else 0.0),
         yaw=_yaw_from_quaternion(rotation),
     )
-    return ts, offset
 
 
-def check_object_consistency(msg) -> None:
-    """Check that all objects in an ObjectList message have the same timestamp and frame_id as the header."""
+def check_object_consistency(msg) -> tuple[int, int]:
+    """Count objects of an ObjectList whose timestamp or frame_id differ from the message header."""
     if not hasattr(msg, "objects"):
-        return
+        return 0, 0
+    stamp_mismatch = sum(obj.state.header.stamp != msg.header.stamp for obj in msg.objects)
+    frame_mismatch = sum(obj.state.header.frame_id != msg.header.frame_id for obj in msg.objects)
+    return stamp_mismatch, frame_mismatch
 
-    header_stamp = msg.header.stamp if hasattr(msg, "header") else None
-    header_frame_id = msg.header.frame_id if hasattr(msg, "header") else None
-
-    for obj in msg.objects:
-        obj_stamp = obj.state.header.stamp if hasattr(obj.state, "header") else None
-        obj_frame_id = obj.state.header.frame_id if hasattr(obj.state, "header") else None
-
-        if header_stamp != obj_stamp:
-            print(f"Warning: Object with ID {obj.id} has different timestamp than header: {obj_stamp} vs {header_stamp}")
-        if header_frame_id != obj_frame_id:
-            print(f"Warning: Object with ID {obj.id} has different frame_id than header: {obj_frame_id} vs {header_frame_id}")
 
 def _yaw_from_quaternion(rotation) -> float:
     # Source: https://en.wikipedia.org/wiki/Conversion_between_quaternions_and_Euler_angles#:~:text=1%5D-,Quaternion%20to%20angles%20%28in%20ZYX%20sequence%29%20conversion
@@ -235,6 +228,22 @@ def _storage_id(meta: dict[str, Any]) -> str:
     return meta["rosbag2_bagfile_information"]["storage_identifier"]
 
 
+def _bag_duration_ns(meta: dict[str, Any]) -> int:
+    try:
+        return int(meta["rosbag2_bagfile_information"]["duration"]["nanoseconds"])
+    except (KeyError, TypeError, ValueError):
+        return 0
+
+
+def _row_stamps(msg: Any, msg_type_name: str) -> set[int]:
+    """Timestamps of the rows a message produces (object/ego state stamps)."""
+    if msg_type_name == "ObjectList":
+        return {int(Time.from_msg(obj.state.header.stamp).nanoseconds) for obj in msg.objects}
+    if msg_type_name == "EgoData":
+        return {int(Time.from_msg(msg.state.header.stamp).nanoseconds)}
+    return set()
+
+
 def iter_bag_messages(
     bag_dir: Path,
     object_list_topic: str | None,
@@ -242,7 +251,6 @@ def iter_bag_messages(
     projection_frame: str,
     ego_data_topic: str | None,
     projection: dict[Any, Any],
-    unresolved_timestamps: set[int] | None = None,
 ) -> Iterator[Any]:
     metadata = _load_metadata(bag_dir)
     storage_id = _storage_id(metadata)
@@ -280,14 +288,24 @@ def iter_bag_messages(
         else:
             raise ValueError(f"{object_list_topic} is not of type ObjectList")
 
-    msg_cls_dict["/tf"] = get_message(type_map["/tf"]) if "/tf" in type_map else None
-    msg_cls_dict["/tf_static"] = get_message(type_map["/tf_static"]) if "/tf_static" in type_map else None
+    for tf_topic in ("/tf", "/tf_static"):
+        if tf_topic in type_map:
+            msg_cls_dict[tf_topic] = get_message(type_map[tf_topic])
 
-    # TF buffer for resolving transforms
-    buffer = Buffer()
+    # Only read the topics that are converted; recorded bags often carry much larger raw sensor topics.
+    reader.set_filter(StorageFilter(topics=list(msg_cls_dict)))
 
-    # Data messages pending because required TF edges are not available yet.
-    pending: deque[tuple[Any, Any, Time, str]] = deque()
+    # TF buffer for resolving transforms. The default cache of 10 s would drop transforms that messages recorded
+    # with a larger delay still need, so keep the whole bag.
+    cache_s = max(10.0, _bag_duration_ns(metadata) / 1e9 + 10.0)
+    buffer = Buffer(cache_time=Duration(seconds=cache_s))
+
+    # Data messages pending because required TF edges are not available yet, grouped by frame_id.
+    pending: dict[str, deque[tuple[Any, Any, Time]]] = {}
+    n_dropped = 0
+    latest_tf_ns = 0
+    n_stamp_mismatch = 0
+    n_frame_mismatch = 0
 
     def _transform_msg_to_projection(msg: Any, msg_type_name: str, transform: Any) -> Any:
         if msg_type_name == "EgoData":
@@ -319,37 +337,53 @@ def iter_bag_messages(
                 return None
             transformed_msg = _transform_msg_to_projection(msg, msg_type_name, to_projection)
 
-        # 2) Store projection metadata as projection_frame -> fixed_frame.
-        if projection_frame == fixed_frame:
-            ts = int(stamp_time.nanoseconds)
-            projection[ts] = ProjectionOffset(x=0.0, y=0.0, z=0.0, yaw=0.0)
-            return transformed_msg
-
-        assert projection_to_fixed is not None
-        ts, proj_offset = _extract_proj_offset(projection_to_fixed)
-        projection[int(ts)] = proj_offset
+        # 2) Store projection metadata as projection_frame -> fixed_frame, under every timestamp the message's
+        #    rows get (object stamps may differ from the header stamp).
+        if projection_to_fixed is None:
+            proj_offset = ProjectionOffset(x=0.0, y=0.0, z=0.0, yaw=0.0)
+        else:
+            proj_offset = _extract_proj_offset(projection_to_fixed)
+        for ts in {int(stamp_time.nanoseconds), *_row_stamps(transformed_msg, msg_type_name)}:
+            projection[ts] = proj_offset
         return transformed_msg
 
-    def retry_pending() -> Iterator[tuple[Any, Any]]:
+    def _frame_connected(frame_id: str) -> bool:
+        if frame_id == projection_frame:
+            return True
+        return buffer.can_transform(projection_frame, frame_id, Time())
+
+    def retry_pending(final: bool = False) -> Iterator[tuple[Any, Any]]:
         """Retry pending messages after TF updates and yield those that resolve."""
+        nonlocal n_dropped
         if not pending:
             return
-
-        new_pending: deque[tuple[Any, Any, Time, str]] = deque()
-        while pending:
-            msg, msg_type, st, frame_id = pending.popleft()
-            msg_type_name = getattr(msg_type, "__name__", str(msg_type))
-            resolved_msg = _resolve_message_and_projection(msg, msg_type_name, st, frame_id)
-            if resolved_msg is None:
-                new_pending.append((msg, msg_type, st, frame_id))
+        if projection_frame != fixed_frame and not buffer.can_transform(fixed_frame, projection_frame, Time()):
+            return
+        for frame_id in list(pending):
+            # Frames without any TF connection are skipped as a whole instead of retrying every message.
+            if not _frame_connected(frame_id):
                 continue
-            yield (resolved_msg, msg_type)
-        pending.extend(new_pending)
+            queue = pending[frame_id]
+            still_pending: deque[tuple[Any, Any, Time]] = deque()
+            while queue:
+                msg, msg_type, st = queue.popleft()
+                msg_type_name = getattr(msg_type, "__name__", str(msg_type))
+                resolved_msg = _resolve_message_and_projection(msg, msg_type_name, st, frame_id)
+                if resolved_msg is not None:
+                    yield (resolved_msg, msg_type)
+                elif final or latest_tf_ns - int(st.nanoseconds) > _STALE_PENDING_NS:
+                    n_dropped += 1
+                else:
+                    still_pending.append((msg, msg_type, st))
+            if still_pending:
+                pending[frame_id] = still_pending
+            else:
+                del pending[frame_id]
 
     while reader.has_next():
         topic_name, data, _ = reader.read_next()
 
-        if topic_name not in msg_cls_dict.keys():
+        if topic_name not in msg_cls_dict:
             continue
 
         try:
@@ -369,34 +403,42 @@ def iter_bag_messages(
         if topic_name == "/tf":
             for transform in msg.transforms:
                 buffer.set_transform(transform, "bag")
+                latest_tf_ns = max(latest_tf_ns, int(Time.from_msg(transform.header.stamp).nanoseconds))
             yield from retry_pending()
             continue
 
         msg_frame_id = msg.header.frame_id
-        if getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name))) == "ObjectList":
-            check_object_consistency(msg)
-        
+        msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
+        if msg_type_name == "ObjectList":
+            stamp_mismatch, frame_mismatch = check_object_consistency(msg)
+            n_stamp_mismatch += stamp_mismatch
+            n_frame_mismatch += frame_mismatch
+
         stamp = msg.header.stamp if hasattr(msg, "header") else None
         if stamp is not None:
             stamp_time = Time.from_msg(stamp)
-            msg_type_name = getattr(msg_cls_dict.get(topic_name), "__name__", str(msg_cls_dict.get(topic_name)))
             resolved_msg = _resolve_message_and_projection(msg, msg_type_name, stamp_time, msg_frame_id)
             if resolved_msg is None:
-                pending.append((msg, msg_cls_dict[topic_name], stamp_time, msg_frame_id))
+                pending.setdefault(msg_frame_id, deque()).append((msg, msg_cls_dict[topic_name], stamp_time))
                 continue
             msg = resolved_msg
 
         yield (msg, msg_cls_dict[topic_name])
 
     # Final retry pass at end (in case TF arrived after last ObjectList)
-    yield from retry_pending()
-    unresolved_ts = {int(st.nanoseconds) for _, _, st, _ in pending}
-    if unresolved_timestamps is not None:
-        unresolved_timestamps.clear()
-        unresolved_timestamps.update(unresolved_ts)
+    yield from retry_pending(final=True)
+    n_unresolved = n_dropped + sum(len(q) for q in pending.values())
 
-    if pending:
-        print(f"Warning: {len(pending)} messages could not be resolved to a projection frame at the end of processing.")
+    if n_stamp_mismatch or n_frame_mismatch:
+        print(
+            f"Warning: {n_stamp_mismatch} objects have a different timestamp and {n_frame_mismatch} objects a "
+            "different frame_id than their ObjectList header; rows use the object timestamp and the header frame_id."
+        )
+    if n_unresolved:
+        print(
+            f"Warning: {n_unresolved} messages could not be resolved to a projection frame and were dropped "
+            f"(frames: {', '.join(sorted(pending)) or 'resolved too late'})."
+        )
 
 
 def _warn_if_reappearing_id(
@@ -425,7 +467,6 @@ def convert_bag_to_omega_prime(
     warn_gap_seconds: float = 3.0,
 ) -> Path:
     projections: dict[Any, Any] = {}
-    unresolved_projection_timestamps: set[int] = set()
     last_seen_by_idx: dict[int, int] = {}
     host_vehicle_id: int | None = None
 
@@ -438,7 +479,6 @@ def convert_bag_to_omega_prime(
             projection_frame,
             ego_data_topic,
             projection=projections,
-            unresolved_timestamps=unresolved_projection_timestamps,
         ):
             msg_type_name = getattr(msg_type, "__name__", str(msg_type))
 
@@ -456,13 +496,20 @@ def convert_bag_to_omega_prime(
                     yield row
 
     df = pl.DataFrame(row_iter())
-    if unresolved_projection_timestamps:
-        unresolved_ts = sorted(unresolved_projection_timestamps)
-        unresolved_expr = pl.col("total_nanos").is_in(unresolved_ts)
-        removed_rows = int(df.select(unresolved_expr.cast(pl.Int64).sum()).item() or 0)
-        df = df.filter(~unresolved_expr)
-        if removed_rows > 0:
-            print(f"Warning: Removed {removed_rows} rows with unresolved projection timestamps after final TF retry.")
+    if df.height == 0:
+        topics = ", ".join(t for t in (object_list_topic, ego_data_topic) if t)
+        raise RuntimeError(
+            f"No objects to convert in {bag_dir} (topics: {topics}): the messages are empty or could not be "
+            "resolved to the projection frame."
+        )
+
+    duplicates = df.filter(pl.struct("total_nanos", "idx").is_duplicated())
+    if duplicates.height:
+        ids = sorted(set(duplicates["idx"].to_list()))[:10]
+        raise ValueError(
+            f"{duplicates.height} rows share timestamp and ID with another row (IDs {ids}). EgoData.vehicle_id must "
+            "differ from all object IDs, and each object ID may appear only once per timestamp."
+        )
 
     if fixed_frame == "map":
         if map_path and map_path.exists():
@@ -550,7 +597,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--projection_frame",
         default=env_projection_frame,
-        help="Data gets transformed into this frame (default: PROJECTION_FRAME or None)",
+        help="Data gets transformed into this frame (default: PROJECTION_FRAME or map)",
     )
     parser.add_argument(
         "--map",
@@ -602,11 +649,20 @@ def main() -> None:
     if not bags:
         raise SystemExit("No rosbag2 directories with metadata.yaml found")
 
+    # One output file per bag name: bags with the same directory name would overwrite each other.
+    by_name: dict[str, list[Path]] = {}
+    for bag in bags:
+        by_name.setdefault(bag.name, []).append(bag)
+    clashes = {name: paths for name, paths in by_name.items() if len(paths) > 1}
+    if clashes:
+        details = "; ".join(f"{name}: {', '.join(map(str, paths))}" for name, paths in clashes.items())
+        raise SystemExit(f"Bags with the same directory name would write the same output file: {details}")
+
     out_dir = Path(args.op_dir).resolve()
     map_path = Path(args.map_path).resolve() if args.map_path else None
 
-    if args.fixed_frame == "map" and map_path and not map_path.exists():
-        raise ValueError("When --fixed_frame is 'map', --map must be specified")
+    if args.fixed_frame == "map" and not (map_path and map_path.exists()):
+        raise ValueError(f"--fixed_frame 'map' needs an existing OpenDRIVE map (--map), got {map_path}")
 
     for bag in bags:
         if map_path and map_path.exists():

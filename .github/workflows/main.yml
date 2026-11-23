@@ -16,7 +16,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  OMEGA_PRIME_VERSION: 0.3.2
+  OMEGA_PRIME_VERSION: 0.3.9
   PERCEPTION_INTERFACES_VERSION: v1.1.0
 
 jobs:
@@ -55,6 +55,15 @@ jobs:
             -t omega-prime-ros:ci \
             -f Dockerfile \
             .
+
+      - name: Run conversion tests
+        run: |
+          # ROS installs pytest plugins (launch_testing) that need extra packages; the tests do not use them.
+          docker run --rm \
+            -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+            -v "$PWD:/repo:ro" \
+            omega-prime-ros:ci \
+            bash -c 'pip install -q --target /tmp/pytest pytest && cd /tmp && PYTHONPATH=/tmp/pytest:$PYTHONPATH python -m pytest -q -p no:cacheprovider /repo/tests'
 
       - name: Run conversion smoke test
         run: |
